@@ -71,23 +71,37 @@ int main(int argc, char *argv[])
   mesh->AddVertex(pt.data());
 
   vector<int> els = { 0,1,2,3,4,5,6,7 };
-  mesh->AddHex(els.data());
+  mesh->AddHex(els.data(),1);
 
   els = { 0,3,2,1 };
-  mesh->AddBdrQuad(els.data());
+  mesh->AddBdrQuad(els.data(),1);
   els = { 0,1,5,4 };
-  mesh->AddBdrQuad(els.data());
+  mesh->AddBdrQuad(els.data(),3);
   els = { 3,0,4,7 };
-  mesh->AddBdrQuad(els.data());
+  mesh->AddBdrQuad(els.data(),3);
   els = { 1,2,6,5 };
-  mesh->AddBdrQuad(els.data());
+  mesh->AddBdrQuad(els.data(),3);
   els = { 6,2,3,7 };
-  mesh->AddBdrQuad(els.data());
+  mesh->AddBdrQuad(els.data(),3);
   els = { 4,5,6,7 };
-  mesh->AddBdrQuad(els.data());
+  mesh->AddBdrQuad(els.data(),2);
 
   mesh->FinalizeTopology();
   mesh->Finalize();
+
+  // 4. Refine the mesh to increase the resolution. In this example we do
+  //    'ref_levels' of uniform refinement. We choose 'ref_levels' to be the
+  //    largest number that gives a final mesh with no more than 1000
+  //    elements.
+  {
+     int ref_levels =
+        (int)floor(log(1000./mesh->GetNE())/log(2.)/dim);
+     for (int l = 0; l < ref_levels; l++)
+     {
+        mesh->UniformRefinement();
+     }
+  }
+
 
   {
     ofstream mesh_ofs("block.mesh");
@@ -95,36 +109,32 @@ int main(int argc, char *argv[])
     mesh->Print(mesh_ofs);
   }
 
+
   FiniteElementCollection *fec;
   FiniteElementSpace *fespace;
   fec = new H1_FECollection(order, dim);
   fespace = new FiniteElementSpace(mesh, fec, dim);
 
-  // manual definition of boundary conditions: nodes 0,1,2,3 are clamped (dofs set to zero)
-  Array<int> ess_tdof_list;
-  ess_tdof_list.SetSize(12);
-  ess_tdof_list[0] = 2;
-  ess_tdof_list[1] = 3;
-  ess_tdof_list[2] = 6;
-  ess_tdof_list[3] = 7;
-  ess_tdof_list[4] = 10;
-  ess_tdof_list[5] = 11;
-  ess_tdof_list[6] = 14;
-  ess_tdof_list[7] = 15;
-  ess_tdof_list[8] = 18;
-  ess_tdof_list[9] = 19;
-  ess_tdof_list[10] = 22;
-  ess_tdof_list[11] = 23;
+  // 6. Determine the list of true (i.e. conforming) essential boundary dofs.
+  //    In this example, the boundary conditions are defined by marking only
+  //    boundary attribute 1 from the mesh as essential and converting it to a
+  //    list of true dofs.
+  Array<int> ess_tdof_list, ess_bdr(mesh->bdr_attributes.Max());
+  ess_bdr = 0;
+  ess_bdr[0] = 1;
+  fespace->GetEssentialTrueDofs(ess_bdr, ess_tdof_list);
 
-  // manual definition of rhs grid function: force along X on face composed of nodes 0-1-4-5
-  mfem::GridFunction my_vec(fespace);
-  my_vec[0] = 1.0;
-  my_vec[1] = 1.0;
-  my_vec[4] = 1.0;
-  my_vec[5] = 1.0;
-
-  // Then we build a Coefficient from this vec
-  VectorGridFunctionCoefficient f(&my_vec);
+  VectorArrayCoefficient f(dim);
+  for (int i = 0; i < dim - 1; i++)
+  {
+    f.Set(i, new ConstantCoefficient(0.0));
+  }
+  {
+    Vector pull_force(mesh->bdr_attributes.Max());
+    pull_force = 0.0;
+    pull_force(1) = -1.0e-2;
+    f.Set(dim - 1, new PWConstCoefficient(pull_force));
+  }
 
   LinearForm *b = new LinearForm(fespace);
   b->AddBoundaryIntegrator(new VectorBoundaryLFIntegrator(f));
@@ -161,15 +171,17 @@ int main(int argc, char *argv[])
   }
 
   {
+    ofstream mesh_ofs("ex1orig.mesh");
+    mesh_ofs.precision(8);
+    mesh->Print(mesh_ofs);
+
     GridFunction *nodes = mesh->GetNodes();
     *nodes += x;
     x *= -1;
-    ofstream mesh_ofs("displaced.mesh");
-    mesh_ofs.precision(8);
-    mesh->Print(mesh_ofs);
-    ofstream sol_ofs("sol.gf");
-    sol_ofs.precision(8);
-    x.Save(sol_ofs);
+
+    ofstream vtk_ofs("ex1sol.vtk");
+    mesh->PrintVTK(vtk_ofs, 1);
+    x.SaveVTK(vtk_ofs, "displacement", 1);
   }
 
   delete a;
