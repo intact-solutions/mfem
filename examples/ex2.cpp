@@ -233,6 +233,10 @@ int main(int argc, char *argv[])
       ofstream sol_ofs("sol.gf");
       sol_ofs.precision(8);
       x.Save(sol_ofs);
+
+      ofstream vtk_ofs("ex2sol.vtk");
+      mesh->PrintVTK(vtk_ofs, 1);
+      x.SaveVTK(vtk_ofs, "displacement", 1);
    }
 
    // 15. Send the above data by socket to a GLVis server. Use the "n" and "b"
