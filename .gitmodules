@@ -1,0 +1,3 @@
+[submodule "IntactMods/tinyply"]
+	path = IntactMods/tinyply
+	url = https://github.com/ddiakopoulos/tinyply.git
