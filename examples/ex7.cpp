@@ -222,12 +222,10 @@ int main(int argc, char *argv[])
    // 12. Save the refined mesh and the solution. This output can be viewed
    //     later using GLVis: "glvis -m sphere_refined.mesh -g sol.gf".
    {
-      ofstream mesh_ofs("sphere_refined.mesh");
+      ofstream mesh_ofs("sphere_refined.vtk");
       mesh_ofs.precision(8);
-      mesh->Print(mesh_ofs);
-      ofstream sol_ofs("sol.gf");
-      sol_ofs.precision(8);
-      x.Save(sol_ofs);
+      mesh->PrintVTK(mesh_ofs,1);
+      x.SaveVTK(mesh_ofs, "displacement",1);
    }
 
    // 13. Send the solution by socket to a GLVis server.

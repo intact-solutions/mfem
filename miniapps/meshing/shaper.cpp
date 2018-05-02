@@ -64,9 +64,9 @@ int material(Vector &x, Vector &xmin, Vector &xmax)
 
 int main(int argc, char *argv[])
 {
-   int sd = 2;
+   int sd = 5;
    int nclimit = 1;
-   const char *mesh_file = "../../data/inline-quad.mesh";
+   const char *mesh_file = "../../data/inline-hex.mesh";
    bool aniso = false;
 
    // Parse command line
@@ -106,6 +106,11 @@ int main(int argc, char *argv[])
    int  visport   = 19916;
    socketstream sol_sock(vishost, visport);
    sol_sock.precision(8);
+
+   // Save the initial mesh
+   ofstream mesh_ofs_in("shaper_initial.vtk");
+   mesh_ofs_in.precision(8);
+   mesh.PrintVTK(mesh_ofs_in);
 
    // Shaping loop
    for (int iter = 0; 1; iter++)
@@ -219,7 +224,7 @@ int main(int argc, char *argv[])
    mesh.SetAttributes();
 
    // Save the final mesh
-   ofstream mesh_ofs("shaper.mesh");
+   ofstream mesh_ofs("shaper.vtk");
    mesh_ofs.precision(8);
-   mesh.Print(mesh_ofs);
+   mesh.PrintVTK(mesh_ofs);
 }
