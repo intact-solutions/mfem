@@ -39,76 +39,146 @@
 #include <fstream>
 #include <iostream>
 #include <vector>
+#include"../IntactMods/tinyply/source/tinyply.h"
 
 using namespace std;
 using namespace mfem;
 
+
+Mesh* MeshFromPly(std::string filename) {
+  /*try
+  {
+    std::ifstream ss(filename);
+
+    if (!ss.good()) {
+      throw std::runtime_error("File not accessible");
+    }
+
+    tinyply::PlyFile file(ss);
+
+    vector<uint32_t> faces;
+    unsigned long faceCount = (unsigned long)file.request_properties_from_element("face", { "vertex_indices" }, faces, 3);
+    if (faceCount == 0) {
+      faceCount = (unsigned long)file.request_properties_from_element("face", { "vertex_index" }, faces, 3);
+    }
+
+    vector<double> verts;
+    file.request_properties_from_element("vertex", { "x", "y", "z" }, verts);
+    file.read(ss);
+
+    Mesh* plymesh = new Mesh(2, verts.size(), faces.size());
+    unsigned long i = 0;
+    while (i < verts.size()) {
+      vector<double> vertex = { (double)verts[i++], (double)verts[i++], (double)verts[i++] };
+      plymesh->AddVertex(vertex.data());
+    }
+
+    i = 0;
+    while (i < faces.size()) {
+      vector<int> v_idx = { (int)faces[i++] , (int)faces[i++] , (int)faces[i++] };
+      plymesh->AddBdrTriangle(v_idx.data());
+    }
+
+    plymesh->FinalizeTopology();
+    plymesh->Finalize();
+    return plymesh;
+  }
+  catch (const std::runtime_error& error)*/
+  {
+    std::ifstream ss(filename);
+
+    if (!ss.good()) {
+      throw std::runtime_error("File not accessible");
+    }
+
+    tinyply::PlyFile file(ss);
+
+    std::vector<uint32_t> faces;
+    unsigned long faceCount = (unsigned long)file.request_properties_from_element("face", { "vertex_indices" }, faces, 3);
+    if (faceCount == 0) {
+      faceCount = (unsigned long)file.request_properties_from_element("face", { "vertex_index" }, faces, 3);
+    }
+    std::vector<float> verts;
+    file.request_properties_from_element("vertex", { "x", "y", "z" }, verts);
+    file.read(ss);
+
+    Mesh* plymesh = new Mesh(2, (int)verts.size()/3, (int)faces.size()/3,0,3);
+    unsigned long i = 0;
+    while (i < verts.size()) {
+      vector<double> vertex = { (double)verts[i++], (double)verts[i++], (double)verts[i++] };
+      plymesh->AddVertex(vertex.data());
+    }
+
+    i = 0;
+    while (i < faces.size()) {
+      vector<int> v_idx = { (int)faces[i++] , (int)faces[i++] , (int)faces[i++] };
+      plymesh->AddTriangle(v_idx.data());
+    }
+    plymesh->FinalizeTopology();
+    plymesh->Finalize();
+    ofstream mesh_ofs("blockply.vtk");
+    mesh_ofs.precision(8);
+    plymesh->PrintVTK(mesh_ofs);
+    return plymesh;
+  }
+}
+
 int main(int argc, char *argv[])
 {
+  Mesh* plymesh  = MeshFromPly("block.ply");
+  delete plymesh;
+  return 0;
   int order = 1;
   bool static_cond = false;
   bool visualization = 1;
 
-  Mesh *mesh = new Mesh(3, 8, 1, 6);
+  Mesh *mesh = new Mesh(10, 20, 30, mfem::Element::HEXAHEDRON, 0, 10, 20, 30);//new Mesh(3, 8, 1, 6);
   int dim = 3;
 
-  // Creating a one-element mesh:
-  vector<double> pt = { 0.0,0.0,0.0 };
-  mesh->AddVertex(pt.data());
-  pt = { 1.0 , 0.0, 0.0 };
-  mesh->AddVertex(pt.data());
-  pt = { 1.0 , 1.0, 0.0 };
-  mesh->AddVertex(pt.data());
-  pt = { 0.0 , 1.0, 0.0 };
-  mesh->AddVertex(pt.data());
-  pt = { 0.0 , 0.0, 1.0 };
-  mesh->AddVertex(pt.data());
-  pt = { 1.0 , 0.0, 1.0 };
-  mesh->AddVertex(pt.data());
-  pt = { 1.0 , 1.0, 1.0 };
-  mesh->AddVertex(pt.data());
-  pt = { 0.0 , 1.0, 1.0 };
-  mesh->AddVertex(pt.data());
+  cout << "total number of elements: " << mesh->GetNE() << "\n";
+  cout << "total number of boundary elements: " << mesh->GetNBE() << "\n";
 
-  vector<int> els = { 0,1,2,3,4,5,6,7 };
-  mesh->AddHex(els.data(),1);
+  int fixed_bdratt = 2, force_bdratt = 3;
 
-  els = { 0,3,2,1 };
-  mesh->AddBdrQuad(els.data(),1);
-  els = { 0,1,5,4 };
-  mesh->AddBdrQuad(els.data(),3);
-  els = { 3,0,4,7 };
-  mesh->AddBdrQuad(els.data(),3);
-  els = { 1,2,6,5 };
-  mesh->AddBdrQuad(els.data(),3);
-  els = { 6,2,3,7 };
-  mesh->AddBdrQuad(els.data(),3);
-  els = { 4,5,6,7 };
-  mesh->AddBdrQuad(els.data(),2);
+  //mesh->GetBdrElement(0)->SetAttribute(fixed_bdratt);
+  //mesh->GetBdrElement(5)->SetAttribute(force_bdratt);
 
   mesh->FinalizeTopology();
   mesh->Finalize();
 
-  // 4. Refine the mesh to increase the resolution. In this example we do
-  //    'ref_levels' of uniform refinement. We choose 'ref_levels' to be the
-  //    largest number that gives a final mesh with no more than 1000
-  //    elements.
+  for (int i = 0; i < mesh->GetNBE(); i++)
   {
-     int ref_levels =
-        (int)floor(log(1000./mesh->GetNE())/log(2.)/dim);
-     for (int l = 0; l < ref_levels; l++)
-     {
-        mesh->UniformRefinement();
-     }
+    auto bdrface = mesh->GetBdrElement(i);
+    Array<int> vertex_idx;
+    bdrface->GetVertices(vertex_idx);
+
+    //even if one vertex is on plane to x == 0 or 10
+    double x_coord = mesh->GetVertex(vertex_idx[0])[0];
+    if (x_coord < .0001 && x_coord > -0.0001) {
+      bdrface->SetAttribute(fixed_bdratt);
+    }else if (x_coord < 10.0001 && x_coord > -10.0001) {
+        bdrface->SetAttribute(force_bdratt);
+    }
   }
 
-
   {
-    ofstream mesh_ofs("block.mesh");
+    ofstream mesh_ofs("block.vtk");
     mesh_ofs.precision(8);
-    mesh->Print(mesh_ofs);
+    mesh->PrintVTK(mesh_ofs);
   }
 
+  //// 4. Refine the mesh to increase the resolution. In this example we do
+  ////    'ref_levels' of uniform refinement. We choose 'ref_levels' to be the
+  ////    largest number that gives a final mesh with no more than 1000
+  ////    elements.
+  //{
+  //   int ref_levels =
+  //      (int)floor(log(1000./mesh->GetNE())/log(2.)/dim);
+  //   for (int l = 0; l < ref_levels; l++)
+  //   {
+  //      mesh->UniformRefinement();
+  //   }
+  //}
 
   FiniteElementCollection *fec;
   FiniteElementSpace *fespace;
@@ -121,7 +191,7 @@ int main(int argc, char *argv[])
   //    list of true dofs.
   Array<int> ess_tdof_list, ess_bdr(mesh->bdr_attributes.Max());
   ess_bdr = 0;
-  ess_bdr[0] = 1;
+  ess_bdr[fixed_bdratt-1] = 1;
   fespace->GetEssentialTrueDofs(ess_bdr, ess_tdof_list);
 
   VectorArrayCoefficient f(dim);
@@ -132,7 +202,7 @@ int main(int argc, char *argv[])
   {
     Vector pull_force(mesh->bdr_attributes.Max());
     pull_force = 0.0;
-    pull_force(1) = -1.0e-2;
+    pull_force(force_bdratt-1) = -1.0e-2;
     f.Set(dim - 1, new PWConstCoefficient(pull_force));
   }
 
@@ -331,6 +401,11 @@ int main2(int argc, char *argv[])
   mesh->Print(mesh_ofs);
   ofstream sol_ofs("sol.gf");
   sol_ofs.precision(8);
+
+  GridFunction *nodes = mesh->GetNodes();
+  *nodes += x;
+  x *= -1;
+
   x.Save(sol_ofs);
 
   // 13. Send the solution by socket to a GLVis server.
