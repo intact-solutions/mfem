@@ -126,14 +126,27 @@ Mesh* MeshFromPly(std::string filename) {
 int main(int argc, char *argv[])
 {
   Mesh* plymesh  = MeshFromPly("block.ply");
-  delete plymesh;
-  return 0;
+  Vector bbmax, bbmin;
+  plymesh->GetBoundingBox(bbmin,bbmax);
+  //shift mesh to 0,0,0
+  for (int i = 0; i < plymesh->GetNV(); i++) {
+    auto vertex = plymesh->GetVertex(i);
+    vertex[0] -= bbmin[0];
+    vertex[1] -= bbmin[1];
+    vertex[2] -= bbmin[2];
+  }
+
+  bbmin = 0.0;
+  bbmax -= bbmin;
+  cout << "bbox [0,0,0] - [" << bbmax[0] << ", " << bbmax[1] << ", " << bbmax[2] << "\n";
+
   int order = 1;
   bool static_cond = false;
   bool visualization = 1;
 
-  Mesh *mesh = new Mesh(10, 20, 30, mfem::Element::HEXAHEDRON, 0, 10, 20, 30);//new Mesh(3, 8, 1, 6);
   int dim = 3;
+  Mesh *mesh = new Mesh(10, 10, 10, mfem::Element::HEXAHEDRON, 0, bbmax[0], bbmax[1], bbmax[2]);
+
 
   cout << "total number of elements: " << mesh->GetNE() << "\n";
   cout << "total number of boundary elements: " << mesh->GetNBE() << "\n";
@@ -152,13 +165,19 @@ int main(int argc, char *argv[])
     Array<int> vertex_idx;
     bdrface->GetVertices(vertex_idx);
 
-    //even if one vertex is on plane to x == 0 or 10
-    double x_coord = mesh->GetVertex(vertex_idx[0])[0];
-    if (x_coord < .0001 && x_coord > -0.0001) {
-      bdrface->SetAttribute(fixed_bdratt);
-    }else if (x_coord < 10.0001 && x_coord > -10.0001) {
-        bdrface->SetAttribute(force_bdratt);
+    bool res_face = true, load_face = true;
+    //even if one vertex is on plane to z == 0 or
+    for (int j = 0; j < vertex_idx.Size(); j++) {
+      double coord = mesh->GetVertex(vertex_idx[0])[2];
+      if (coord > .01)
+        res_face = false;
+      else if (coord < 29.99)
+        load_face = false;
     }
+    if(res_face)
+      bdrface->SetAttribute(fixed_bdratt);
+    if(load_face)
+      bdrface->SetAttribute(force_bdratt);
   }
 
   {
@@ -202,7 +221,7 @@ int main(int argc, char *argv[])
   {
     Vector pull_force(mesh->bdr_attributes.Max());
     pull_force = 0.0;
-    pull_force(force_bdratt-1) = -1.0e-2;
+    pull_force(force_bdratt-1) = 1.0;
     f.Set(dim - 1, new PWConstCoefficient(pull_force));
   }
 
@@ -262,7 +281,7 @@ int main(int argc, char *argv[])
     delete fec;
   }
   delete mesh;
-
+  delete plymesh;
   return 0;
 }
 
