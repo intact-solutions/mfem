@@ -44,84 +44,43 @@
 using namespace std;
 using namespace mfem;
 
+//class MyCoefficient;
 
-Mesh* MeshFromPly(std::string filename) {
-  /*try
+class MyCoefficient : public Coefficient
+{
+private:
+  GridFunction & u;
+  ConstantCoefficient lambda, mu;
+  DenseMatrix eps, sigma;
+
+public:
+  MyCoefficient(GridFunction &_u, ConstantCoefficient &_lambda, ConstantCoefficient &_mu)
+    : u(_u), lambda(_lambda), mu(_mu) { }
+  virtual double Eval(ElementTransformation &T, const IntegrationPoint &ip)
   {
-    std::ifstream ss(filename);
-
-    if (!ss.good()) {
-      throw std::runtime_error("File not accessible");
-    }
-
-    tinyply::PlyFile file(ss);
-
-    vector<uint32_t> faces;
-    unsigned long faceCount = (unsigned long)file.request_properties_from_element("face", { "vertex_indices" }, faces, 3);
-    if (faceCount == 0) {
-      faceCount = (unsigned long)file.request_properties_from_element("face", { "vertex_index" }, faces, 3);
-    }
-
-    vector<double> verts;
-    file.request_properties_from_element("vertex", { "x", "y", "z" }, verts);
-    file.read(ss);
-
-    Mesh* plymesh = new Mesh(2, verts.size(), faces.size());
-    unsigned long i = 0;
-    while (i < verts.size()) {
-      vector<double> vertex = { (double)verts[i++], (double)verts[i++], (double)verts[i++] };
-      plymesh->AddVertex(vertex.data());
-    }
-
-    i = 0;
-    while (i < faces.size()) {
-      vector<int> v_idx = { (int)faces[i++] , (int)faces[i++] , (int)faces[i++] };
-      plymesh->AddBdrTriangle(v_idx.data());
-    }
-
-    plymesh->FinalizeTopology();
-    plymesh->Finalize();
-    return plymesh;
+    u.GetVectorGradient(T, eps);  // eps = grad(u)
+    eps.Symmetrize();             // eps = (1/2)*(grad(u) + grad(u)^t)
+    double l = lambda.Eval(T, ip);
+    double m = mu.Eval(T, ip);
+    sigma.Diag(l*eps.Trace(), eps.Size()); // sigma = lambda*trace(eps)*I
+    sigma.Add(2 * m, eps);          // sigma += 2*mu*eps
+    //cout << "size of stress matrix" << sigma.Size();
+    double sigdif1 = (sigma(0, 0) - sigma(1, 1));
+    double sigdif2 = (sigma(2, 2) - sigma(1, 1));
+    double sigdif3 = (sigma(0, 0) - sigma(2, 2));
+    double sigshearsq =
+      sigma(0, 1)*sigma(0, 1) +
+      sigma(0, 2)*sigma(0, 2) +
+      sigma(2, 1)*sigma(2, 1);
+    double vonmises = sqrt(sigdif1*sigdif1 + sigdif2 * sigdif2 + sigdif3 * sigdif3 + 6 * sigshearsq);
+    return vonmises; // return sigma_xx
   }
-  catch (const std::runtime_error& error)*/
-  {
-    std::ifstream ss(filename);
+  virtual void Read(istream &in) { }
+  virtual ~MyCoefficient() { }
+};
 
-    if (!ss.good()) {
-      throw std::runtime_error("File not accessible");
-    }
-
-    tinyply::PlyFile file(ss);
-
-    std::vector<uint32_t> faces;
-    unsigned long faceCount = (unsigned long)file.request_properties_from_element("face", { "vertex_indices" }, faces, 3);
-    if (faceCount == 0) {
-      faceCount = (unsigned long)file.request_properties_from_element("face", { "vertex_index" }, faces, 3);
-    }
-    std::vector<float> verts;
-    file.request_properties_from_element("vertex", { "x", "y", "z" }, verts);
-    file.read(ss);
-
-    Mesh* plymesh = new Mesh(2, (int)verts.size()/3, (int)faces.size()/3,0,3);
-    unsigned long i = 0;
-    while (i < verts.size()) {
-      vector<double> vertex = { (double)verts[i++], (double)verts[i++], (double)verts[i++] };
-      plymesh->AddVertex(vertex.data());
-    }
-
-    i = 0;
-    while (i < faces.size()) {
-      vector<int> v_idx = { (int)faces[i++] , (int)faces[i++] , (int)faces[i++] };
-      plymesh->AddTriangle(v_idx.data());
-    }
-    plymesh->FinalizeTopology();
-    plymesh->Finalize();
-    ofstream mesh_ofs("blockply.vtk");
-    mesh_ofs.precision(8);
-    plymesh->PrintVTK(mesh_ofs);
-    return plymesh;
-  }
-}
+Mesh* MeshFromPly(std::string filename);
+void SamplePly(FiniteElementSpace* fespace_ply, Mesh* plymesh, Mesh* mesh, int dim, GridFunction &x, GridFunction &x_ply);
 
 int main(int argc, char *argv[])
 {
@@ -263,36 +222,9 @@ int main(int argc, char *argv[])
 
   a->RecoverFEMSolution(X, *b, x);
 
- //sample ply mesh
   GridFunction x_ply(fespace_ply);
   x_ply = 0.0;
-  double * ply_data = x_ply.GetData();
-  int ply_data_size = x_ply.Size();
-  cout << "Size " << ply_data_size << endl;
-  int index = 0;
-  for (int i = 0; i < plymesh->GetNV(); i++) {
-    Vector point(plymesh->GetVertex(i),3);
-    DenseMatrix points(dim, 1);
-    points.SetCol(0, point);
-    Array<int> elem_ids;
-    Array<IntegrationPoint> ips;
-    mesh->FindPoints(points, elem_ids, ips);
-    cout << "Point: " << point[0] << " " << point[1] << " " << point[2] << " ";
-    cout << "Element Id: " << elem_ids[0] << " size " << elem_ids.Size() << " relative point " << ips[0].x << ", " << ips[0].y << ", " << ips[0].z << " ";
-    //cout << x.GetValue(elem_ids[0], ips[0], 0) << ", " << x.GetValue(elem_ids[0], ips[0]) <<", " << x.GetValue(elem_ids[0], ips[0],2)  <<endl;
-
-    Array<int> dof(1), vdof(3);
-    dof = -1;
-    vdof = -1;
-    fespace_ply->GetVertexDofs(i, dof);
-    cout << "dof: "<< dof[0] << ", vdof: " << fespace_ply->DofToVDof(dof[0], 0) << ", " << fespace_ply->DofToVDof(dof[0], 1) << ", " << fespace_ply->DofToVDof(dof[0], 2) << " ";
-
-    cout << "Displacement value [" << x.GetValue(elem_ids[0], ips[0], 0) << ", " << x.GetValue(elem_ids[0], ips[0]) <<", " << x.GetValue(elem_ids[0], ips[0],2)  <<"]\n";
-    ply_data[fespace_ply->DofToVDof(dof[0], 0)] = x.GetValue(elem_ids[0], ips[0], 1);
-    ply_data[fespace_ply->DofToVDof(dof[0], 1)] = x.GetValue(elem_ids[0], ips[0], 2);
-    ply_data[fespace_ply->DofToVDof(dof[0], 2)] = x.GetValue(elem_ids[0], ips[0], 3);
-  }
-
+  SamplePly(fespace_ply, plymesh, mesh, dim, x, x_ply);
 
   if (!mesh->NURBSext)
   {
@@ -315,7 +247,24 @@ int main(int argc, char *argv[])
     ofstream vtk_ofs_ply("ex1sol_ply.vtk");
     plymesh->PrintVTK(vtk_ofs_ply, 1);
     x_ply.SaveVTK(vtk_ofs_ply, "displacement", 1);
+
+  //compute stress
+
+    // A. Define a finite element space for post-processing the solution. We
+    //    use a discontinuous space of the same order as the solution.
+    H1_FECollection stress_fec(order, dim);
+    FiniteElementSpace stress_fespace(mesh, &stress_fec);
+    GridFunction stress_field(&stress_fespace);
+
+
+    // B. Project the post-processing coefficient defined above to the
+    //    'pp_field' GridFunction.
+    MyCoefficient stress_coeff(x, lambda_func, mu_func);
+    stress_field.ProjectCoefficient(stress_coeff);
+    //stress_field.SaveVTK(vtk_ofs_ply, "stress", 1);
+    stress_field.SaveVTK(vtk_ofs, "stress", 1);
   }
+
 
   delete a;
   delete b;
@@ -328,3 +277,115 @@ int main(int argc, char *argv[])
   delete plymesh;
   return 0;
 }
+
+void SamplePly(FiniteElementSpace* fespace_ply, Mesh* plymesh, Mesh* mesh, int dim, GridFunction &x, GridFunction &x_ply ) {
+  //sample ply mesh
+  double * ply_data = x_ply.GetData();
+  int ply_data_size = x_ply.Size();
+  cout << "Size " << ply_data_size << endl;
+  int index = 0;
+  for (int i = 0; i < plymesh->GetNV(); i++) {
+    Vector point(plymesh->GetVertex(i), 3);
+    DenseMatrix points(dim, 1);
+    points.SetCol(0, point);
+    Array<int> elem_ids;
+    Array<IntegrationPoint> ips;
+    mesh->FindPoints(points, elem_ids, ips);
+    /*cout << "Point: " << point[0] << " " << point[1] << " " << point[2] << " ";
+    cout << "Element Id: " << elem_ids[0] << " size " << elem_ids.Size() << " relative point " << ips[0].x << ", " << ips[0].y << ", " << ips[0].z << " ";*/
+    //cout << x.GetValue(elem_ids[0], ips[0], 0) << ", " << x.GetValue(elem_ids[0], ips[0]) <<", " << x.GetValue(elem_ids[0], ips[0],2)  <<endl;
+
+    Array<int> dof(1), vdof(3);
+    dof = -1;
+    vdof = -1;
+    fespace_ply->GetVertexDofs(i, dof);
+    /*cout << "dof: " << dof[0] << ", vdof: " << fespace_ply->DofToVDof(dof[0], 0) << ", " << fespace_ply->DofToVDof(dof[0], 1) << ", " << fespace_ply->DofToVDof(dof[0], 2) << " ";*/
+
+    /*cout << "Displacement value [" << x.GetValue(elem_ids[0], ips[0], 0) << ", " << x.GetValue(elem_ids[0], ips[0]) << ", " << x.GetValue(elem_ids[0], ips[0], 2) << "]\n";*/
+    ply_data[fespace_ply->DofToVDof(dof[0], 0)] = x.GetValue(elem_ids[0], ips[0], 1);
+    ply_data[fespace_ply->DofToVDof(dof[0], 1)] = x.GetValue(elem_ids[0], ips[0], 2);
+    ply_data[fespace_ply->DofToVDof(dof[0], 2)] = x.GetValue(elem_ids[0], ips[0], 3);
+  }
+
+}
+
+
+Mesh* MeshFromPly(std::string filename) {
+  /*try
+  {
+  std::ifstream ss(filename);
+
+  if (!ss.good()) {
+  throw std::runtime_error("File not accessible");
+  }
+
+  tinyply::PlyFile file(ss);
+
+  vector<uint32_t> faces;
+  unsigned long faceCount = (unsigned long)file.request_properties_from_element("face", { "vertex_indices" }, faces, 3);
+  if (faceCount == 0) {
+  faceCount = (unsigned long)file.request_properties_from_element("face", { "vertex_index" }, faces, 3);
+  }
+
+  vector<double> verts;
+  file.request_properties_from_element("vertex", { "x", "y", "z" }, verts);
+  file.read(ss);
+
+  Mesh* plymesh = new Mesh(2, verts.size(), faces.size());
+  unsigned long i = 0;
+  while (i < verts.size()) {
+  vector<double> vertex = { (double)verts[i++], (double)verts[i++], (double)verts[i++] };
+  plymesh->AddVertex(vertex.data());
+  }
+
+  i = 0;
+  while (i < faces.size()) {
+  vector<int> v_idx = { (int)faces[i++] , (int)faces[i++] , (int)faces[i++] };
+  plymesh->AddBdrTriangle(v_idx.data());
+  }
+
+  plymesh->FinalizeTopology();
+  plymesh->Finalize();
+  return plymesh;
+  }
+  catch (const std::runtime_error& error)*/
+  {
+    std::ifstream ss(filename);
+
+    if (!ss.good()) {
+      throw std::runtime_error("File not accessible");
+    }
+
+    tinyply::PlyFile file(ss);
+
+    std::vector<uint32_t> faces;
+    unsigned long faceCount = (unsigned long)file.request_properties_from_element("face", { "vertex_indices" }, faces, 3);
+    if (faceCount == 0) {
+      faceCount = (unsigned long)file.request_properties_from_element("face", { "vertex_index" }, faces, 3);
+    }
+    std::vector<float> verts;
+    file.request_properties_from_element("vertex", { "x", "y", "z" }, verts);
+    file.read(ss);
+
+    Mesh* plymesh = new Mesh(2, (int)verts.size() / 3, (int)faces.size() / 3, 0, 3);
+    unsigned long i = 0;
+    while (i < verts.size()) {
+      vector<double> vertex = { (double)verts[i++], (double)verts[i++], (double)verts[i++] };
+      plymesh->AddVertex(vertex.data());
+    }
+
+    i = 0;
+    while (i < faces.size()) {
+      vector<int> v_idx = { (int)faces[i++] , (int)faces[i++] , (int)faces[i++] };
+      plymesh->AddTriangle(v_idx.data());
+    }
+    plymesh->FinalizeTopology();
+    plymesh->Finalize();
+    ofstream mesh_ofs("blockply.vtk");
+    mesh_ofs.precision(8);
+    plymesh->PrintVTK(mesh_ofs);
+    return plymesh;
+  }
+}
+
+
