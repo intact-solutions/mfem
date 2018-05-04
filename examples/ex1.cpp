@@ -176,8 +176,11 @@ int main(int argc, char *argv[])
     }
     if(res_face)
       bdrface->SetAttribute(fixed_bdratt);
-    if(load_face)
+    if (load_face) {
       bdrface->SetAttribute(force_bdratt);
+      //auto vertices = bdrface->GetVertices();
+      //cout << "loaded vertices: " << vertices[0] << ", " << vertices[2] << ", " << vertices[2] << "\n";
+    }
   }
 
   {
@@ -186,23 +189,29 @@ int main(int argc, char *argv[])
     mesh->PrintVTK(mesh_ofs);
   }
 
-  //// 4. Refine the mesh to increase the resolution. In this example we do
-  ////    'ref_levels' of uniform refinement. We choose 'ref_levels' to be the
-  ////    largest number that gives a final mesh with no more than 1000
-  ////    elements.
-  //{
-  //   int ref_levels =
-  //      (int)floor(log(1000./mesh->GetNE())/log(2.)/dim);
-  //   for (int l = 0; l < ref_levels; l++)
-  //   {
-  //      mesh->UniformRefinement();
-  //   }
-  //}
+  // 4. Refine the mesh to increase the resolution. In this example we do
+  //    'ref_levels' of uniform refinement. We choose 'ref_levels' to be the
+  //    largest number that gives a final mesh with no more than 1000
+  //    elements.
+  {
+    int ref_levels = 2;
+        //(int)floor(log(5000./plymesh->GetNE())/log(2.)/dim);
+     for (int l = 0; l < ref_levels; l++)
+     {
+        plymesh->UniformRefinement();
+     }
+  }
 
   FiniteElementCollection *fec;
   FiniteElementSpace *fespace;
   fec = new H1_FECollection(order, dim);
   fespace = new FiniteElementSpace(mesh, fec, dim);
+
+  FiniteElementCollection *fec_ply;
+  FiniteElementSpace *fespace_ply;
+  fec_ply = new H1_FECollection(order, dim);
+  fespace_ply = new FiniteElementSpace(plymesh, fec_ply, dim);
+
 
   // 6. Determine the list of true (i.e. conforming) essential boundary dofs.
   //    In this example, the boundary conditions are defined by marking only
@@ -254,6 +263,37 @@ int main(int argc, char *argv[])
 
   a->RecoverFEMSolution(X, *b, x);
 
+ //sample ply mesh
+  GridFunction x_ply(fespace_ply);
+  x_ply = 0.0;
+  double * ply_data = x_ply.GetData();
+  int ply_data_size = x_ply.Size();
+  cout << "Size " << ply_data_size << endl;
+  int index = 0;
+  for (int i = 0; i < plymesh->GetNV(); i++) {
+    Vector point(plymesh->GetVertex(i),3);
+    DenseMatrix points(dim, 1);
+    points.SetCol(0, point);
+    Array<int> elem_ids;
+    Array<IntegrationPoint> ips;
+    mesh->FindPoints(points, elem_ids, ips);
+    cout << "Point: " << point[0] << " " << point[1] << " " << point[2] << " ";
+    cout << "Element Id: " << elem_ids[0] << " size " << elem_ids.Size() << " relative point " << ips[0].x << ", " << ips[0].y << ", " << ips[0].z << " ";
+    //cout << x.GetValue(elem_ids[0], ips[0], 0) << ", " << x.GetValue(elem_ids[0], ips[0]) <<", " << x.GetValue(elem_ids[0], ips[0],2)  <<endl;
+
+    Array<int> dof(1), vdof(3);
+    dof = -1;
+    vdof = -1;
+    fespace_ply->GetVertexDofs(i, dof);
+    cout << "dof: "<< dof[0] << ", vdof: " << fespace_ply->DofToVDof(dof[0], 0) << ", " << fespace_ply->DofToVDof(dof[0], 1) << ", " << fespace_ply->DofToVDof(dof[0], 2) << " ";
+
+    cout << "Displacement value [" << x.GetValue(elem_ids[0], ips[0], 0) << ", " << x.GetValue(elem_ids[0], ips[0]) <<", " << x.GetValue(elem_ids[0], ips[0],2)  <<"]\n";
+    ply_data[fespace_ply->DofToVDof(dof[0], 0)] = x.GetValue(elem_ids[0], ips[0], 1);
+    ply_data[fespace_ply->DofToVDof(dof[0], 1)] = x.GetValue(elem_ids[0], ips[0], 2);
+    ply_data[fespace_ply->DofToVDof(dof[0], 2)] = x.GetValue(elem_ids[0], ips[0], 3);
+  }
+
+
   if (!mesh->NURBSext)
   {
     mesh->SetNodalFESpace(fespace);
@@ -265,12 +305,16 @@ int main(int argc, char *argv[])
     mesh->Print(mesh_ofs);
 
     GridFunction *nodes = mesh->GetNodes();
-    *nodes += x;
-    x *= -1;
+    //*nodes += x;
+    //x *= -1;
 
     ofstream vtk_ofs("ex1sol.vtk");
     mesh->PrintVTK(vtk_ofs, 1);
     x.SaveVTK(vtk_ofs, "displacement", 1);
+
+    ofstream vtk_ofs_ply("ex1sol_ply.vtk");
+    plymesh->PrintVTK(vtk_ofs_ply, 1);
+    x_ply.SaveVTK(vtk_ofs_ply, "displacement", 1);
   }
 
   delete a;
@@ -282,167 +326,5 @@ int main(int argc, char *argv[])
   }
   delete mesh;
   delete plymesh;
-  return 0;
-}
-
-int main2(int argc, char *argv[])
-{
-  // 1. Parse command-line options.
-  const char *mesh_file = "../data/fichera-q2.vtk";
-  int order = 1;
-  bool static_cond = false;
-  bool visualization = 1;
-
-  OptionsParser args(argc, argv);
-  args.AddOption(&mesh_file, "-m", "--mesh",
-    "Mesh file to use.");
-  args.AddOption(&order, "-o", "--order",
-    "Finite element order (polynomial degree) or -1 for"
-    " isoparametric space.");
-  args.AddOption(&static_cond, "-sc", "--static-condensation", "-no-sc",
-    "--no-static-condensation", "Enable static condensation.");
-  args.AddOption(&visualization, "-vis", "--visualization", "-no-vis",
-    "--no-visualization",
-    "Enable or disable GLVis visualization.");
-  args.Parse();
-  if (!args.Good())
-  {
-    args.PrintUsage(cout);
-    return 1;
-  }
-  args.PrintOptions(cout);
-
-  // 2. Read the mesh from the given mesh file. We can handle triangular,
-  //    quadrilateral, tetrahedral, hexahedral, surface and volume meshes with
-  //    the same code.
-  Mesh *mesh = new Mesh(mesh_file, 1, 1);
-  int dim = mesh->Dimension();
-
-  // 3. Refine the mesh to increase the resolution. In this example we do
-  //    'ref_levels' of uniform refinement. We choose 'ref_levels' to be the
-  //    largest number that gives a final mesh with no more than 50,000
-  //    elements.
-  {
-    int ref_levels =
-      (int)floor(log(50000. / mesh->GetNE()) / log(2.) / dim);
-    for (int l = 0; l < ref_levels; l++)
-    {
-      mesh->UniformRefinement();
-    }
-  }
-
-  // 4. Define a finite element space on the mesh. Here we use continuous
-  //    Lagrange finite elements of the specified order. If order < 1, we
-  //    instead use an isoparametric/isogeometric space.
-  FiniteElementCollection *fec;
-  if (order > 0)
-  {
-    fec = new H1_FECollection(order, dim);
-  }
-  else if (mesh->GetNodes())
-  {
-    fec = mesh->GetNodes()->OwnFEC();
-    cout << "Using isoparametric FEs: " << fec->Name() << endl;
-  }
-  else
-  {
-    fec = new H1_FECollection(order = 1, dim);
-  }
-  FiniteElementSpace *fespace = new FiniteElementSpace(mesh, fec);
-  cout << "Number of finite element unknowns: "
-    << fespace->GetTrueVSize() << endl;
-
-  // 5. Determine the list of true (i.e. conforming) essential boundary dofs.
-  //    In this example, the boundary conditions are defined by marking all
-  //    the boundary attributes from the mesh as essential (Dirichlet) and
-  //    converting them to a list of true dofs.
-  Array<int> ess_tdof_list;
-  if (mesh->bdr_attributes.Size())
-  {
-    Array<int> ess_bdr(mesh->bdr_attributes.Max());
-    ess_bdr = 1;
-    fespace->GetEssentialTrueDofs(ess_bdr, ess_tdof_list);
-  }
-
-  // 6. Set up the linear form b(.) which corresponds to the right-hand side of
-  //    the FEM linear system, which in this case is (1,phi_i) where phi_i are
-  //    the basis functions in the finite element fespace.
-  LinearForm *b = new LinearForm(fespace);
-  ConstantCoefficient one(1.0);
-  b->AddDomainIntegrator(new DomainLFIntegrator(one));
-  b->Assemble();
-
-  // 7. Define the solution vector x as a finite element grid function
-  //    corresponding to fespace. Initialize x with initial guess of zero,
-  //    which satisfies the boundary conditions.
-  GridFunction x(fespace);
-  x = 0.0;
-
-  // 8. Set up the bilinear form a(.,.) on the finite element space
-  //    corresponding to the Laplacian operator -Delta, by adding the Diffusion
-  //    domain integrator.
-  BilinearForm *a = new BilinearForm(fespace);
-  a->AddDomainIntegrator(new DiffusionIntegrator(one));
-
-  // 9. Assemble the bilinear form and the corresponding linear system,
-  //    applying any necessary transformations such as: eliminating boundary
-  //    conditions, applying conforming constraints for non-conforming AMR,
-  //    static condensation, etc.
-  if (static_cond) { a->EnableStaticCondensation(); }
-  a->Assemble();
-
-  SparseMatrix A;
-  Vector B, X;
-  a->FormLinearSystem(ess_tdof_list, x, *b, A, X, B);
-
-  cout << "Size of linear system: " << A.Height() << endl;
-
-#ifndef MFEM_USE_SUITESPARSE
-  // 10. Define a simple symmetric Gauss-Seidel preconditioner and use it to
-  //     solve the system A X = B with PCG.
-  GSSmoother M(A);
-  PCG(A, M, B, X, 1, 200, 1e-12, 0.0);
-#else
-  // 10. If MFEM was compiled with SuiteSparse, use UMFPACK to solve the system.
-  UMFPackSolver umf_solver;
-  umf_solver.Control[UMFPACK_ORDERING] = UMFPACK_ORDERING_METIS;
-  umf_solver.SetOperator(A);
-  umf_solver.Mult(B, X);
-#endif
-
-  // 11. Recover the solution as a finite element grid function.
-  a->RecoverFEMSolution(X, *b, x);
-
-  // 12. Save the refined mesh and the solution. This output can be viewed later
-  //     using GLVis: "glvis -m refined.mesh -g sol.gf".
-  ofstream mesh_ofs("refined.mesh");
-  mesh_ofs.precision(8);
-  mesh->Print(mesh_ofs);
-  ofstream sol_ofs("sol.gf");
-  sol_ofs.precision(8);
-
-  GridFunction *nodes = mesh->GetNodes();
-  *nodes += x;
-  x *= -1;
-
-  x.Save(sol_ofs);
-
-  // 13. Send the solution by socket to a GLVis server.
-  if (visualization)
-  {
-    char vishost[] = "localhost";
-    int  visport = 19916;
-    socketstream sol_sock(vishost, visport);
-    sol_sock.precision(8);
-    sol_sock << "solution\n" << *mesh << x << flush;
-  }
-
-  // 14. Free the used memory.
-  delete a;
-  delete b;
-  delete fespace;
-  if (order > 0) { delete fec; }
-  delete mesh;
-
   return 0;
 }
