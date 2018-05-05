@@ -153,7 +153,7 @@ int main(int argc, char *argv[])
   //    largest number that gives a final mesh with no more than 1000
   //    elements.
   {
-    int ref_levels = 2;
+    int ref_levels = 4;
         //(int)floor(log(5000./plymesh->GetNE())/log(2.)/dim);
      for (int l = 0; l < ref_levels; l++)
      {
@@ -182,15 +182,17 @@ int main(int argc, char *argv[])
   fespace->GetEssentialTrueDofs(ess_bdr, ess_tdof_list);
 
   VectorArrayCoefficient f(dim);
-  for (int i = 0; i < dim - 1; i++)
   {
-    f.Set(i, new ConstantCoefficient(0.0));
-  }
-  {
-    Vector pull_force(mesh->bdr_attributes.Max());
-    pull_force = 0.0;
-    pull_force(force_bdratt-1) = 1.0;
-    f.Set(dim - 1, new PWConstCoefficient(pull_force));
+    for (int i = 0; i < dim - 1; i++)
+    {
+      f.Set(i, new ConstantCoefficient(0.0));
+    }
+    {
+      Vector pull_force(mesh->bdr_attributes.Max());
+      pull_force = 0.0;
+      pull_force(force_bdratt - 1) = 1.0;
+      f.Set(dim - 1, new PWConstCoefficient(pull_force));
+    }
   }
 
   LinearForm *b = new LinearForm(fespace);
@@ -219,7 +221,6 @@ int main(int argc, char *argv[])
 
   GSSmoother M(A);
   PCG(A, M, B, X, 1, 500, 1e-8, 0.0);
-
   a->RecoverFEMSolution(X, *b, x);
 
   GridFunction x_ply(fespace_ply);
@@ -251,31 +252,32 @@ int main(int argc, char *argv[])
   //compute stress
 
     // A. Define a finite element space for post-processing the solution. We
-    //    use a discontinuous space of the same order as the solution.
+    //    use a discontinuous space of the same order as the solution. L2
     H1_FECollection stress_fec(order, dim);
-    FiniteElementSpace stress_fespace(mesh, &stress_fec);
+    FiniteElementSpace stress_fespace(plymesh, &stress_fec);
     GridFunction stress_field(&stress_fespace);
 
 
     // B. Project the post-processing coefficient defined above to the
     //    'pp_field' GridFunction.
-    MyCoefficient stress_coeff(x, lambda_func, mu_func);
+    MyCoefficient stress_coeff(x_ply, lambda_func, mu_func);
     stress_field.ProjectCoefficient(stress_coeff);
     //stress_field.SaveVTK(vtk_ofs_ply, "stress", 1);
-    stress_field.SaveVTK(vtk_ofs, "stress", 1);
+    stress_field.SaveVTK(vtk_ofs_ply, "stress", 1);
   }
 
-
-  delete a;
-  delete b;
-  if (fec)
   {
-    delete fespace;
-    delete fec;
+    delete a;
+    delete b;
+    if (fec)
+    {
+      delete fespace;
+      delete fec;
+    }
+    delete mesh;
+    delete plymesh;
+    return 0;
   }
-  delete mesh;
-  delete plymesh;
-  return 0;
 }
 
 void SamplePly(FiniteElementSpace* fespace_ply, Mesh* plymesh, Mesh* mesh, int dim, GridFunction &x, GridFunction &x_ply ) {
