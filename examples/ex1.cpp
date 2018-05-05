@@ -110,42 +110,13 @@ int main(int argc, char *argv[])
   cout << "total number of elements: " << mesh->GetNE() << "\n";
   cout << "total number of boundary elements: " << mesh->GetNBE() << "\n";
 
-  int fixed_bdratt = 2, force_bdratt = 3;
-
-  //mesh->GetBdrElement(0)->SetAttribute(fixed_bdratt);
-  //mesh->GetBdrElement(5)->SetAttribute(force_bdratt);
-
   mesh->FinalizeTopology();
   mesh->Finalize();
-
-  for (int i = 0; i < mesh->GetNBE(); i++)
+  int fixed_bdratt = 1, force_bdratt = 6;
   {
-    auto bdrface = mesh->GetBdrElement(i);
-    Array<int> vertex_idx;
-    bdrface->GetVertices(vertex_idx);
-
-    bool res_face = true, load_face = true;
-    //even if one vertex is on plane to z == 0 or
-    for (int j = 0; j < vertex_idx.Size(); j++) {
-      double coord = mesh->GetVertex(vertex_idx[0])[2];
-      if (coord > .01)
-        res_face = false;
-      else if (coord < 29.99)
-        load_face = false;
-    }
-    if(res_face)
-      bdrface->SetAttribute(fixed_bdratt);
-    if (load_face) {
-      bdrface->SetAttribute(force_bdratt);
-      //auto vertices = bdrface->GetVertices();
-      //cout << "loaded vertices: " << vertices[0] << ", " << vertices[2] << ", " << vertices[2] << "\n";
-    }
-  }
-
-  {
-    ofstream mesh_ofs("block.vtk");
+    ofstream mesh_ofs("block.mesh");
     mesh_ofs.precision(8);
-    mesh->PrintVTK(mesh_ofs);
+    mesh->Print(mesh_ofs);
   }
 
   // 4. Refine the mesh to increase the resolution. In this example we do
@@ -177,9 +148,11 @@ int main(int argc, char *argv[])
   //    boundary attribute 1 from the mesh as essential and converting it to a
   //    list of true dofs.
   Array<int> ess_tdof_list, ess_bdr(mesh->bdr_attributes.Max());
-  ess_bdr = 0;
-  ess_bdr[fixed_bdratt-1] = 1;
-  fespace->GetEssentialTrueDofs(ess_bdr, ess_tdof_list);
+  {
+    ess_bdr = 0;
+    ess_bdr[fixed_bdratt - 1] = 1;
+    fespace->GetEssentialTrueDofs(ess_bdr, ess_tdof_list);
+  }
 
   VectorArrayCoefficient f(dim);
   {
@@ -216,12 +189,12 @@ int main(int argc, char *argv[])
   Vector B, X;
   a->FormLinearSystem(ess_tdof_list, x, *b, A, X, B);
   cout << "done." << endl;
-
   cout << "Size of linear system: " << A.Height() << endl;
 
   GSSmoother M(A);
   PCG(A, M, B, X, 1, 500, 1e-8, 0.0);
   a->RecoverFEMSolution(X, *b, x);
+  cout << "Max/Min x Value: " << x.Max() << "/" << x.Min() << "\n";
 
   GridFunction x_ply(fespace_ply);
   x_ply = 0.0;
