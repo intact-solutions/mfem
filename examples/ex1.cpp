@@ -79,6 +79,117 @@ public:
   virtual ~MyCoefficient() { }
 };
 
+/** Integrator for the linear elasticity form:
+a(u,v) = (lambda div(u), div(v)) + (2 mu e(u), e(v)),
+where e(v) = (1/2) (grad(v) + grad(v)^T).
+This is a 'Vector' integrator, i.e. defined for FE spaces
+using multiple copies of a scalar FE space. */
+class ElasticityIntegratorCustom : public BilinearFormIntegrator
+{
+private:
+  double q_lambda, q_mu;
+  Coefficient *lambda, *mu;
+
+#ifndef MFEM_THREAD_SAFE
+  DenseMatrix dshape, Jinv, gshape, pelmat;
+  Vector divshape;
+#endif
+
+public:
+  ElasticityIntegratorCustom(Coefficient &l, Coefficient &m)
+  {
+    lambda = &l; mu = &m;
+  }
+  /** With this constructor lambda = q_l * m and mu = q_m * m;
+  if dim * q_l + 2 * q_m = 0 then trace(sigma) = 0. */
+  ElasticityIntegratorCustom(Coefficient &m, double q_l, double q_m)
+  {
+    lambda = NULL; mu = &m; q_lambda = q_l; q_mu = q_m;
+  }
+
+  virtual void AssembleElementMatrix(
+    const FiniteElement &el, ElementTransformation &Trans, DenseMatrix &elmat)
+  {
+    int dof = el.GetDof();
+    int dim = el.GetDim();
+    double w, L, M;
+
+#ifdef MFEM_THREAD_SAFE
+    DenseMatrix dshape(dof, dim), Jinv(dim), gshape(dof, dim), pelmat(dof);
+    Vector divshape(dim*dof);
+#else
+    Jinv.SetSize(dim);
+    dshape.SetSize(dof, dim);
+    gshape.SetSize(dof, dim);
+    pelmat.SetSize(dof);
+    divshape.SetSize(dim*dof);
+#endif
+
+    elmat.SetSize(dof * dim);
+
+    const IntegrationRule *ir = IntRule;
+    if (ir == NULL)
+    {
+      int order = 2 * Trans.OrderGrad(&el); // correct order?
+      ir = &IntRules.Get(el.GetGeomType(), order);
+    }
+
+    elmat = 0.0;
+
+    for (int i = 0; i < ir->GetNPoints(); i++)
+    {
+      const IntegrationPoint &ip = ir->IntPoint(i);
+
+      el.CalcDShape(ip, dshape);
+
+      Trans.SetIntPoint(&ip);
+      w = ip.weight * Trans.Weight();
+      CalcInverse(Trans.Jacobian(), Jinv);
+      Mult(dshape, Jinv, gshape);
+      MultAAt(gshape, pelmat);
+      gshape.GradToDiv(divshape);
+
+      M = mu->Eval(Trans, ip);
+      if (lambda)
+      {
+        L = lambda->Eval(Trans, ip);
+      }
+      else
+      {
+        L = q_lambda * M;
+        M = q_mu * M;
+      }
+
+      if (L != 0.0)
+      {
+        AddMult_a_VVt(L * w, divshape, elmat);
+      }
+
+      if (M != 0.0)
+      {
+        for (int d = 0; d < dim; d++)
+        {
+          for (int k = 0; k < dof; k++)
+            for (int l = 0; l < dof; l++)
+            {
+              elmat(dof*d + k, dof*d + l) += (M * w) * pelmat(k, l);
+            }
+        }
+        for (int i = 0; i < dim; i++)
+          for (int j = 0; j < dim; j++)
+          {
+            for (int k = 0; k < dof; k++)
+              for (int l = 0; l < dof; l++)
+                elmat(dof*i + k, dof*j + l) +=
+                (M * w) * gshape(k, j) * gshape(l, i);
+            // + (L * w) * gshape(k, i) * gshape(l, j)
+          }
+      }
+    }
+  }
+};
+
+
 Mesh* MeshFromPly(std::string filename);
 void SamplePly(FiniteElementSpace* fespace_ply, Mesh* plymesh, Mesh* mesh, int dim, GridFunction &x, GridFunction &x_ply);
 
@@ -179,7 +290,7 @@ int main(int argc, char *argv[])
   ConstantCoefficient mu_func(30.0);
 
   BilinearForm *a = new BilinearForm(fespace);
-  a->AddDomainIntegrator(new ElasticityIntegrator(lambda_func, mu_func));
+  a->AddDomainIntegrator(new ElasticityIntegratorCustom(lambda_func, mu_func));
 
   cout << "matrix ... " << flush;
   if (static_cond) { a->EnableStaticCondensation(); }
