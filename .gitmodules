@@ -1,3 +1,6 @@
 [submodule "IntactMods/tinyply"]
 	path = IntactMods/tinyply
 	url = https://github.com/ddiakopoulos/tinyply.git
+[submodule "IntactMods/json"]
+	path = IntactMods/json
+	url = https://github.com/nlohmann/json.git
