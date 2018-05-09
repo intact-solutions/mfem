@@ -46,15 +46,21 @@
 using namespace std;
 using namespace mfem;
 using json = nlohmann::json;
+
+struct MomentCell {
+  vec3 index;
+  vec3 scale_factor, origin;
+  unsigned order;
+  vector<double> moments;
+  bool is_boundary = false;
+};
+
+vector<MomentCell> cells;
 int global_element_idx = 0;
 
 //class MyCoefficient;
 
-struct MomentCell {
-  vec3 scale_factor, origin;
-  unsigned order;
-  vector<double> moments;
-};
+
 void ReadMoments(string moment_filename);
 void GetMFIntegrationRule(IntegrationRule& intrule, MomentCell cell);
 
@@ -103,7 +109,11 @@ private:
   Coefficient *lambda, *mu;
 
 #ifndef MFEM_THREAD_SAFE
-  DenseMatrix dshape, Jinv, gshape, pelmat;
+  DenseMatrix dshape, //dshape is the gradient of the shape function in ref space
+    Jinv,   //Jacobian inverse
+    gshape, //gspace seems to be the gradient in the geometry? space
+    pelmat; //gspace \dot gspace^T
+
   Vector divshape;
 #endif
 
@@ -139,18 +149,14 @@ public:
 
     elmat.SetSize(dof * dim);
 
-    const IntegrationRule *ir = IntRule;
-    if (ir == NULL)
-    {
-      int order = 2 * Trans.OrderGrad(&el); // correct order?
-      ir = &IntRules.Get(el.GetGeomType(), order);
-    }
+    IntegrationRule ir;
+    GetMFIntegrationRule(ir, cells[global_element_idx++]);
 
     elmat = 0.0;
 
-    for (int i = 0; i < ir->GetNPoints(); i++)
+    for (int i = 0; i < ir.GetNPoints(); i++)
     {
-      const IntegrationPoint &ip = ir->IntPoint(i);
+      const IntegrationPoint &ip = ir.IntPoint(i);
 
       el.CalcDShape(ip, dshape);
 
@@ -267,6 +273,8 @@ int main(int argc, char *argv[])
   fec_ply = new H1_FECollection(order, dim);
   fespace_ply = new FiniteElementSpace(plymesh, fec_ply, dim);
 
+  //initialize the global parameters for moment fitting
+  QuadratureGenerator::InitializeNormalizedQuadratures(5);
 
   // 6. Determine the list of true (i.e. conforming) essential boundary dofs.
   //    In this example, the boundary conditions are defined by marking only
@@ -383,6 +391,8 @@ void GetMFIntegrationRule(IntegrationRule& intrule, MomentCell cell) {
   unsigned moment_size = (unsigned)pow(order + 1, 3);
   vec3 origin, cell_size;
   bool is_boundary = false;
+  if (order > 0)
+    is_boundary = true;
   Vector moment_vector(moment_size);
   moment_vector = 0.0;
 
@@ -395,6 +405,12 @@ void GetMFIntegrationRule(IntegrationRule& intrule, MomentCell cell) {
 
   //compute quadrature points
   QuadratureGenerator quadrature(moment_vector, origin, cell_size, order, is_boundary);
+
+  for (long k = 0; k < quadrature.m_quad_weights.Size(); k++) {
+    IntegrationPoint ip;
+    ip.Set(quadrature.m_quad_points[k][0], quadrature.m_quad_points[k][1], quadrature.m_quad_points[k][2], quadrature.m_quad_weights[k]);
+    intrule.Append(ip);
+  }
 }
 
 void ReadMoments(string moments_filename) {
@@ -406,9 +422,11 @@ void ReadMoments(string moments_filename) {
   }
   json moment_json;
   file >> moment_json;
-
-  std::vector<MomentCell> cells;
   {
+    std::vector<double> const bounds = moment_json["bounding_box"];
+    std::array<int, 3> const nbins = moment_json["n_bins"];
+    double const cell_length = moment_json["cell_length"];
+
     for (json const& instance : moment_json["instances"]) {
       std::string instance_id = instance["instance_id"];
       cells.resize(instance["bins"].size());
@@ -416,11 +434,24 @@ void ReadMoments(string moments_filename) {
       for (size_t bin_index = 0; bin_index < instance["bins"].size(); bin_index++) {
         auto const& bin = instance["bins"][bin_index];
         MomentCell& cell = cells[bin_index];
+
+        vec3 index = { (unsigned long)bin["i"], (unsigned long)bin["j"], (unsigned long)bin["k"] };
+        cell.index = index;
+
         cell.order = bin["order"];
         if (cell.order > 0) {
+          cell.is_boundary = true;
           cell.scale_factor = bin["scale_factor"];
           cell.origin = bin["origin"];
           cell.moments = bin["moment_vector"].get<std::vector<double>>();
+        }
+        else {
+          //interior cell
+          cell.order = 1;
+          cell.scale_factor = { cell_length, cell_length, cell_length };
+          cell.origin[0] = bounds[0] + ((double)cell.index[0] + 0.5) * cell_length;
+          cell.origin[1] = bounds[1] + ((double)cell.index[1] + 0.5) * cell_length;
+          cell.origin[2] = bounds[2] + ((double)cell.index[2] + 0.5) * cell_length;
         }
       }
     }
