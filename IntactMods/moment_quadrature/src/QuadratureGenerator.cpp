@@ -89,8 +89,7 @@ void QuadratureGenerator::RescaleQuadPoints()
 {
   for (unsigned i = 0; i < m_point_count; i++) {
     for (int j = 0; j < 3; j++) {
-      //scale up and translate
-      m_quad_points[i][j] = m_quad_points[i][j] * m_scale_factor[j];
+      //translate (mfem ref element is [0,1])
       m_quad_points[i][j] = m_quad_points[i][j] + m_new_origin[j];
     }
   }

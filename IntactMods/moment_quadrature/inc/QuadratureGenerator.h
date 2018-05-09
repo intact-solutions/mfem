@@ -7,6 +7,7 @@
 using namespace mfem;
 using namespace std;
 typedef array<double, 3> vec3;
+typedef std::array<unsigned long, 3> IndexTriplet;
 
 class QuadratureGenerator
 {

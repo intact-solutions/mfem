@@ -48,7 +48,7 @@ using namespace mfem;
 using json = nlohmann::json;
 
 struct MomentCell {
-  vec3 index;
+  IndexTriplet index;
   vec3 scale_factor, origin;
   unsigned order;
   vector<double> moments;
@@ -150,13 +150,22 @@ public:
     elmat.SetSize(dof * dim);
 
     IntegrationRule ir;
+
+    //if (ir == NULL)
+    //{
+    //  int order = 2 * Trans.OrderGrad(&el); // correct order?
+    //  ir = IntRules.Get(el.GetGeomType(), order);
+    //}
+
     GetMFIntegrationRule(ir, cells[global_element_idx++]);
 
     elmat = 0.0;
-
+    double total_w = 0;
     for (int i = 0; i < ir.GetNPoints(); i++)
     {
       const IntegrationPoint &ip = ir.IntPoint(i);
+      total_w += ip.weight;
+      //cout << "Integration point x,y,z: [" << ip.x << ", " << ip.y << ", " << ip.z << "]" << "w: " << total_w << "\n";
 
       el.CalcDShape(ip, dshape);
 
@@ -390,21 +399,18 @@ void GetMFIntegrationRule(IntegrationRule& intrule, MomentCell cell) {
   unsigned order = cell.order;
   unsigned moment_size = (unsigned)pow(order + 1, 3);
   vec3 origin, cell_size;
-  bool is_boundary = false;
-  if (order > 0)
-    is_boundary = true;
   Vector moment_vector(moment_size);
   moment_vector = 0.0;
 
-  origin = cell.origin;
-  cell_size = cell.scale_factor;
-  assert(moment_size == cell.moments.size());
-  for (unsigned j = 0; j < moment_size; j++) {
-    moment_vector(j) = cell.moments[j];
+  //assert(moment_size == cell.moments.size());
+  if (cell.is_boundary) {
+    for (unsigned j = 0; j < moment_size; j++) {
+      moment_vector(j) = cell.moments[j];
+    }
   }
 
   //compute quadrature points
-  QuadratureGenerator quadrature(moment_vector, origin, cell_size, order, is_boundary);
+  QuadratureGenerator quadrature(moment_vector, cell.origin, cell.scale_factor, order, cell.is_boundary);
 
   for (long k = 0; k < quadrature.m_quad_weights.Size(); k++) {
     IntegrationPoint ip;
@@ -435,23 +441,21 @@ void ReadMoments(string moments_filename) {
         auto const& bin = instance["bins"][bin_index];
         MomentCell& cell = cells[bin_index];
 
-        vec3 index = { (unsigned long)bin["i"], (unsigned long)bin["j"], (unsigned long)bin["k"] };
+        IndexTriplet index = { (unsigned long)bin["i"], (unsigned long)bin["j"], (unsigned long)bin["k"] };
         cell.index = index;
 
         cell.order = bin["order"];
         if (cell.order > 0) {
           cell.is_boundary = true;
-          cell.scale_factor = bin["scale_factor"];
-          cell.origin = bin["origin"];
+          cell.scale_factor = { 1.0, 1.0, 1.0 };
+          cell.origin = { 0.5, 0.5, 0.5 }; //bin["origin"];
           cell.moments = bin["moment_vector"].get<std::vector<double>>();
         }
         else {
           //interior cell
           cell.order = 1;
-          cell.scale_factor = { cell_length, cell_length, cell_length };
-          cell.origin[0] = bounds[0] + ((double)cell.index[0] + 0.5) * cell_length;
-          cell.origin[1] = bounds[1] + ((double)cell.index[1] + 0.5) * cell_length;
-          cell.origin[2] = bounds[2] + ((double)cell.index[2] + 0.5) * cell_length;
+          cell.scale_factor = { 1.0, 1.0, 1.0 };
+          cell.origin = { 0.5, 0.5, 0.5 };
         }
       }
     }
