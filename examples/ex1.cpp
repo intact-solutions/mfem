@@ -39,12 +39,24 @@
 #include <fstream>
 #include <iostream>
 #include <vector>
-#include"../IntactMods/tinyply/source/tinyply.h"
+#include "../IntactMods/tinyply/source/tinyply.h"
+#include "../IntactMods/json/single_include/nlohmann/json.hpp"
+#include "../IntactMods/moment_quadrature/inc/QuadratureGenerator.h"
 
 using namespace std;
 using namespace mfem;
+using json = nlohmann::json;
+int global_element_idx = 0;
 
 //class MyCoefficient;
+
+struct MomentCell {
+  vec3 scale_factor, origin;
+  unsigned order;
+  vector<double> moments;
+};
+void ReadMoments(string moment_filename);
+void GetMFIntegrationRule(IntegrationRule& intrule, MomentCell cell);
 
 class MyCoefficient : public Coefficient
 {
@@ -215,14 +227,16 @@ int main(int argc, char *argv[])
   bool visualization = 1;
 
   int dim = 3;
-  Mesh *mesh = new Mesh(10, 10, 10, mfem::Element::HEXAHEDRON, 0, bbmax[0], bbmax[1], bbmax[2]);
-
+  Mesh *mesh = new Mesh("bridge_moments.vtk");//new Mesh(10, 10, 10, mfem::Element::HEXAHEDRON, 0, bbmax[0], bbmax[1], bbmax[2]);
 
   cout << "total number of elements: " << mesh->GetNE() << "\n";
   cout << "total number of boundary elements: " << mesh->GetNBE() << "\n";
+  auto att = mesh->GetElement(1)->GetAttribute();
+  cout << "total number of element attributes " << att << "\n";
 
   mesh->FinalizeTopology();
   mesh->Finalize();
+
   int fixed_bdratt = 1, force_bdratt = 6;
   {
     ofstream mesh_ofs("block.mesh");
@@ -361,6 +375,55 @@ int main(int argc, char *argv[])
     delete mesh;
     delete plymesh;
     return 0;
+  }
+}
+
+void GetMFIntegrationRule(IntegrationRule& intrule, MomentCell cell) {
+  unsigned order = cell.order;
+  unsigned moment_size = (unsigned)pow(order + 1, 3);
+  vec3 origin, cell_size;
+  bool is_boundary = false;
+  Vector moment_vector(moment_size);
+  moment_vector = 0.0;
+
+  origin = cell.origin;
+  cell_size = cell.scale_factor;
+  assert(moment_size == cell.moments.size());
+  for (unsigned j = 0; j < moment_size; j++) {
+    moment_vector(j) = cell.moments[j];
+  }
+
+  //compute quadrature points
+  QuadratureGenerator quadrature(moment_vector, origin, cell_size, order, is_boundary);
+}
+
+void ReadMoments(string moments_filename) {
+  std::string filename = moments_filename;
+  std::ifstream file(filename);
+
+  if (!file.good()) {
+    throw std::runtime_error("Moment file not accessible");
+  }
+  json moment_json;
+  file >> moment_json;
+
+  std::vector<MomentCell> cells;
+  {
+    for (json const& instance : moment_json["instances"]) {
+      std::string instance_id = instance["instance_id"];
+      cells.resize(instance["bins"].size());
+
+      for (size_t bin_index = 0; bin_index < instance["bins"].size(); bin_index++) {
+        auto const& bin = instance["bins"][bin_index];
+        MomentCell& cell = cells[bin_index];
+        cell.order = bin["order"];
+        if (cell.order > 0) {
+          cell.scale_factor = bin["scale_factor"];
+          cell.origin = bin["origin"];
+          cell.moments = bin["moment_vector"].get<std::vector<double>>();
+        }
+      }
+    }
   }
 }
 
