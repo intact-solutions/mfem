@@ -57,12 +57,15 @@ struct MomentCell {
 
 vector<MomentCell> cells;
 int global_element_idx = 0;
+double total_volume = 0.0;
+bool print_flag = false;
 
 //class MyCoefficient;
 
 
 void ReadMoments(string moment_filename);
 void GetMFIntegrationRule(IntegrationRule& intrule, MomentCell cell);
+void block_ref_simulation(int order, int dim);
 
 class MyCoefficient : public Coefficient
 {
@@ -164,13 +167,16 @@ public:
     for (int i = 0; i < ir.GetNPoints(); i++)
     {
       const IntegrationPoint &ip = ir.IntPoint(i);
-      total_w += ip.weight;
-      //cout << "Integration point x,y,z: [" << ip.x << ", " << ip.y << ", " << ip.z << "]" << "w: " << total_w << "\n";
-
       el.CalcDShape(ip, dshape);
-
       Trans.SetIntPoint(&ip);
-      w = ip.weight * Trans.Weight();
+      w = ip.weight;// *Trans.Weight();
+
+      total_w += ip.weight;
+      if (print_flag) {
+        cout << "Integration point x,y,z: [" << ip.x << ", " << ip.y << ", " << ip.z << "]" << "w: " << total_w << "\n";
+      }
+
+      total_volume += w;
       CalcInverse(Trans.Jacobian(), Jinv);
       Mult(dshape, Jinv, gshape);
       MultAAt(gshape, pelmat);
@@ -213,6 +219,7 @@ public:
           }
       }
     }
+    print_flag = false;
   }
 };
 
@@ -242,7 +249,13 @@ int main(int argc, char *argv[])
   bool visualization = 1;
 
   int dim = 3;
-  Mesh *mesh = new Mesh("bridge_moments.vtk");//new Mesh(10, 10, 10, mfem::Element::HEXAHEDRON, 0, bbmax[0], bbmax[1], bbmax[2]);
+  Mesh *mesh = new Mesh("block.vtk");
+
+  //read moments
+  ReadMoments("block_moments.json");
+  //initialize the global parameters for moment fitting
+  QuadratureGenerator::InitializeNormalizedQuadratures(5);
+
 
   cout << "total number of elements: " << mesh->GetNE() << "\n";
   cout << "total number of boundary elements: " << mesh->GetNBE() << "\n";
@@ -271,13 +284,11 @@ int main(int argc, char *argv[])
       bdrface->SetAttribute(force_bdratt);
     }
     else {
-      bdrface->SetAttribute(0);
+      bdrface->SetAttribute(1);
     }
   }
   mesh->FinalizeTopology();
   mesh->Finalize();
-
-  int fixed_bdratt = 1, force_bdratt = 6;
   {
     ofstream mesh_ofs("block.mesh");
     mesh_ofs.precision(8);
@@ -307,14 +318,28 @@ int main(int argc, char *argv[])
   fec_ply = new H1_FECollection(order, dim);
   fespace_ply = new FiniteElementSpace(plymesh, fec_ply, dim);
 
-  //initialize the global parameters for moment fitting
-  QuadratureGenerator::InitializeNormalizedQuadratures(5);
-
   // 6. Determine the list of true (i.e. conforming) essential boundary dofs.
   //    In this example, the boundary conditions are defined by marking only
   //    boundary attribute 1 from the mesh as essential and converting it to a
   //    list of true dofs.
   Array<int> ess_tdof_list, ess_bdr(mesh->bdr_attributes.Max());
+  {
+    ess_bdr = 0;
+    ess_bdr[fixed_bdratt - 1] = 1;
+    fespace->GetEssentialTrueDofs(ess_bdr, ess_tdof_list);
+  }
+
+  Mesh *mesh_ref = new Mesh(5, 10, 15, mfem::Element::HEXAHEDRON, 0, 10, 20, 30);
+  int fixed_bdratt_ref = 1, force_bdratt_ref = 6;
+  mesh_ref->FinalizeTopology();
+  mesh_ref->Finalize();
+
+  FiniteElementCollection *fec_ref;
+  FiniteElementSpace *fespace_ref;
+  fec_ref = new H1_FECollection(order, dim);
+  fespace_ref = new FiniteElementSpace(mesh_ref, fec_ref, dim);
+
+  Array<int> ess_tdof_list_ref, ess_bdr_ref(mesh->bdr_attributes.Max());
   {
     ess_bdr = 0;
     ess_bdr[fixed_bdratt - 1] = 1;
@@ -351,12 +376,19 @@ int main(int argc, char *argv[])
   cout << "matrix ... " << flush;
   if (static_cond) { a->EnableStaticCondensation(); }
   a->Assemble();
+  cout << "Total Vol: " << total_volume << endl;
 
   SparseMatrix A;
   Vector B, X;
   a->FormLinearSystem(ess_tdof_list, x, *b, A, X, B);
   cout << "done." << endl;
   cout << "Size of linear system: " << A.Height() << endl;
+
+  a->Finalize();
+  cout << "Main a matrix: ";
+  for (int i = 0; i < 72; i++)
+    cout << a->Elem(i, i) << " ";
+  cout << "\n";
 
   GSSmoother M(A);
   PCG(A, M, B, X, 1, 500, 1e-8, 0.0);
@@ -416,7 +448,123 @@ int main(int argc, char *argv[])
     }
     delete mesh;
     delete plymesh;
-    return 0;
+
+  }
+  block_ref_simulation(order, dim);
+  return 0;
+}
+
+void block_ref_simulation(int order, int dim) {
+
+  Mesh *mesh = new Mesh(1, 2, 3, mfem::Element::HEXAHEDRON, 0, 10, 20, 30);
+
+  int fixed_bdratt = 1, force_bdratt = 6;
+  mesh->FinalizeTopology();
+  mesh->Finalize();
+
+  FiniteElementCollection *fec;
+  FiniteElementSpace *fespace;
+  fec = new H1_FECollection(order, dim);
+  fespace = new FiniteElementSpace(mesh, fec, dim);
+
+  Array<int> ess_tdof_list, ess_bdr(mesh->bdr_attributes.Max());
+  {
+    ess_bdr = 0;
+    ess_bdr[fixed_bdratt - 1] = 1;
+    fespace->GetEssentialTrueDofs(ess_bdr, ess_tdof_list);
+  }
+
+  VectorArrayCoefficient f(dim);
+  {
+    for (int i = 0; i < dim - 1; i++)
+    {
+      f.Set(i, new ConstantCoefficient(0.0));
+    }
+    {
+      Vector pull_force(mesh->bdr_attributes.Max());
+      pull_force = 0.0;
+      pull_force(force_bdratt - 1) = 1.0;
+      f.Set(dim - 1, new PWConstCoefficient(pull_force));
+    }
+  }
+
+  LinearForm *b = new LinearForm(fespace);
+  b->AddBoundaryIntegrator(new VectorBoundaryLFIntegrator(f));
+  b->Assemble();
+
+  GridFunction x(fespace);
+  x = 0.0;
+
+  ConstantCoefficient lambda_func(100.0);
+  ConstantCoefficient mu_func(30.0);
+
+  BilinearForm *a = new BilinearForm(fespace);
+  a->AddDomainIntegrator(new ElasticityIntegrator(lambda_func, mu_func));
+
+  cout << "matrix ... " << flush;
+  a->Assemble();
+
+  SparseMatrix A;
+  Vector B, X;
+  a->FormLinearSystem(ess_tdof_list, x, *b, A, X, B);
+  cout << "done." << endl;
+  cout << "Size of linear system: " << A.Height() << endl;
+
+  //a->Finalize();
+  //ofstream a_ofs("amatrix_ref.txt");
+  //a->Print(a_ofs);
+
+  a->Finalize();
+  cout << "Ref a matrix: ";
+  for (int i = 0; i < 72; i++)
+    cout << a->Elem(i, i) << " ";
+  cout << "\n";
+
+  GSSmoother M(A);
+  PCG(A, M, B, X, 1, 500, 1e-8, 0.0);
+  a->RecoverFEMSolution(X, *b, x);
+  cout << "Max/Min x Value: " << x.Max() << "/" << x.Min() << "\n";
+
+  if (!mesh->NURBSext)
+  {
+    mesh->SetNodalFESpace(fespace);
+  }
+
+  {
+    GridFunction *nodes = mesh->GetNodes();
+    //*nodes += x;
+    //x *= -1;
+
+    ofstream vtk_ofs("ex1sol_ref.vtk");
+    mesh->PrintVTK(vtk_ofs, 1);
+    x.SaveVTK(vtk_ofs, "displacement", 1);
+
+    //compute stress
+
+    // A. Define a finite element space for post-processing the solution. We
+    //    use a discontinuous space of the same order as the solution. L2
+    H1_FECollection stress_fec(order, dim);
+    FiniteElementSpace stress_fespace(mesh, &stress_fec);
+    GridFunction stress_field(&stress_fespace);
+
+
+    // B. Project the post-processing coefficient defined above to the
+    //    'pp_field' GridFunction.
+    MyCoefficient stress_coeff(x, lambda_func, mu_func);
+    stress_field.ProjectCoefficient(stress_coeff);
+    //stress_field.SaveVTK(vtk_ofs_ply, "stress", 1);
+    stress_field.SaveVTK(vtk_ofs, "stress", 1);
+  }
+
+  {
+    delete a;
+    delete b;
+    if (fec)
+    {
+      delete fespace;
+      delete fec;
+    }
+    delete mesh;
   }
 }
 
@@ -472,14 +620,14 @@ void ReadMoments(string moments_filename) {
         cell.order = bin["order"];
         if (cell.order > 0) {
           cell.is_boundary = true;
-          cell.scale_factor = { 1.0, 1.0, 1.0 };
+          cell.scale_factor = bin["scale_factor"];
           cell.origin = { 0.5, 0.5, 0.5 }; //bin["origin"];
           cell.moments = bin["moment_vector"].get<std::vector<double>>();
         }
         else {
           //interior cell
-          cell.order = 1;
-          cell.scale_factor = { 1.0, 1.0, 1.0 };
+          cell.order = 2;
+          cell.scale_factor = { cell_length, cell_length, cell_length };
           cell.origin = { 0.5, 0.5, 0.5 };
         }
       }
