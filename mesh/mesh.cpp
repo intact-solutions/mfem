@@ -2662,7 +2662,8 @@ void Mesh::Loader(std::istream &input, int generate_edges,
       ReadTrueGridMesh(input);
    }
    else if (mesh_type == "# vtk DataFile Version 3.0" ||
-            mesh_type == "# vtk DataFile Version 2.0") // VTK
+            mesh_type == "# vtk DataFile Version 2.0" ||
+            mesh_type == "# vtk DataFile Version 4.2") // VTK
    {
       ReadVTKMesh(input, curved, read_gf);
    }
