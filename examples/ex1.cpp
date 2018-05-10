@@ -249,6 +249,31 @@ int main(int argc, char *argv[])
   auto att = mesh->GetElement(1)->GetAttribute();
   cout << "total number of element attributes " << att << "\n";
 
+  int fixed_bdratt = 2, force_bdratt = 3;
+  for (int i = 0; i < mesh->GetNBE(); i++)
+  {
+    auto bdrface = mesh->GetBdrElement(i);
+    Array<int> vertex_idx;
+    bdrface->GetVertices(vertex_idx);
+
+    bool res_face = true, load_face = true;
+    //even all vertices lie at some height
+    for (int j = 0; j < vertex_idx.Size(); j++) {
+      double coord = mesh->GetVertex(vertex_idx[j])[2];
+      if (coord > .01)
+        res_face = false;
+      if (coord < 29.99)
+        load_face = false;
+    }
+    if(res_face)
+      bdrface->SetAttribute(fixed_bdratt);
+    else if (load_face) {
+      bdrface->SetAttribute(force_bdratt);
+    }
+    else {
+      bdrface->SetAttribute(0);
+    }
+  }
   mesh->FinalizeTopology();
   mesh->Finalize();
 
