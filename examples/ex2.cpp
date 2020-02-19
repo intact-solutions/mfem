@@ -46,7 +46,7 @@ using namespace mfem;
 int main(int argc, char *argv[])
 {
    // 1. Parse command-line options.
-   const char *mesh_file = "../data/beam-tri.mesh";
+   const char *mesh_file = "../data/beam-tet.mesh";
    int order = 1;
    bool static_cond = false;
    bool visualization = 1;
@@ -82,25 +82,25 @@ int main(int argc, char *argv[])
       return 3;
    }
 
-   // 3. Select the order of the finite element discretization space. For NURBS
-   //    meshes, we increase the order by degree elevation.
-   if (mesh->NURBSext)
-   {
-      mesh->DegreeElevate(order, order);
-   }
+   //// 3. Select the order of the finite element discretization space. For NURBS
+   ////    meshes, we increase the order by degree elevation.
+   //if (mesh->NURBSext)
+   //{
+   //   mesh->DegreeElevate(order, order);
+   //}
 
-   // 4. Refine the mesh to increase the resolution. In this example we do
-   //    'ref_levels' of uniform refinement. We choose 'ref_levels' to be the
-   //    largest number that gives a final mesh with no more than 5,000
-   //    elements.
-   {
-      int ref_levels =
-         (int)floor(log(5000./mesh->GetNE())/log(2.)/dim);
-      for (int l = 0; l < ref_levels; l++)
-      {
-         mesh->UniformRefinement();
-      }
-   }
+   //// 4. Refine the mesh to increase the resolution. In this example we do
+   ////    'ref_levels' of uniform refinement. We choose 'ref_levels' to be the
+   ////    largest number that gives a final mesh with no more than 5,000
+   ////    elements.
+   //{
+   //   int ref_levels =
+   //      (int)floor(log(5000./mesh->GetNE())/log(2.)/dim);
+   //   for (int l = 0; l < ref_levels; l++)
+   //   {
+   //      mesh->UniformRefinement();
+   //   }
+   //}
 
    // 5. Define a finite element space on the mesh. Here we use vector finite
    //    elements, i.e. dim copies of a scalar finite element space. The vector
@@ -166,12 +166,12 @@ int main(int argc, char *argv[])
    //    corresponding to the linear elasticity integrator with piece-wise
    //    constants coefficient lambda and mu.
    Vector lambda(mesh->attributes.Max());
-   lambda = 1.0;
-   lambda(0) = lambda(1)*50;
+   lambda = 50.0;
+   //lambda(0) = lambda(1)*50;
    PWConstCoefficient lambda_func(lambda);
    Vector mu(mesh->attributes.Max());
-   mu = 1.0;
-   mu(0) = mu(1)*50;
+   mu = 50.0;
+   //mu(0) = mu(1)*50;
    PWConstCoefficient mu_func(mu);
 
    BilinearForm *a = new BilinearForm(fespace);
@@ -262,3 +262,29 @@ int main(int argc, char *argv[])
 
    return 0;
 }
+
+
+class MyCoefficient : public Coefficient
+{
+private:
+  GridFunction & u;
+  ConstantCoefficient lambda, mu;
+  DenseMatrix eps, sigma;
+
+public:
+  MyCoefficient(GridFunction &_u, ConstantCoefficient &_lambda, ConstantCoefficient &_mu)
+    : u(_u), lambda(_lambda), mu(_mu) { }
+  virtual double Eval(ElementTransformation &T, const IntegrationPoint &ip)
+  {
+    u.GetVectorGradient(T, eps);  // eps = grad(u)
+    eps.Symmetrize();             // eps = (1/2)*(grad(u) + grad(u)^t)
+    double l = lambda.Eval(T, ip);
+    double m = mu.Eval(T, ip);
+    sigma.Diag(l*eps.Trace(), eps.Size()); // sigma = lambda*trace(eps)*I
+    sigma.Add(2 * m, eps);          // sigma += 2*mu*eps
+
+    return sigma(0, 0); // return sigma_xx
+  }
+  virtual void Read(istream &in) { }
+  virtual ~MyCoefficient() { }
+};

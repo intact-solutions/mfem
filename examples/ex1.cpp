@@ -384,11 +384,11 @@ int main(int argc, char *argv[])
   cout << "done." << endl;
   cout << "Size of linear system: " << A.Height() << endl;
 
-  a->Finalize();
-  cout << "Main a matrix: ";
-  for (int i = 0; i < 72; i++)
-    cout << a->Elem(i, i) << " ";
-  cout << "\n";
+  //a->Finalize();
+  //cout << "Main a matrix: ";
+  //for (int i = 0; i < 72; i++)
+  //  cout << a->Elem(i, i) << " ";
+  //cout << "\n";
 
   GSSmoother M(A);
   PCG(A, M, B, X, 1, 500, 1e-8, 0.0);
@@ -514,11 +514,11 @@ void block_ref_simulation(int order, int dim) {
   //ofstream a_ofs("amatrix_ref.txt");
   //a->Print(a_ofs);
 
-  a->Finalize();
-  cout << "Ref a matrix: ";
-  for (int i = 0; i < 72; i++)
-    cout << a->Elem(i, i) << " ";
-  cout << "\n";
+  //a->Finalize();
+  //cout << "Ref a matrix: ";
+  //for (int i = 0; i < 72; i++)
+  //  cout << a->Elem(i, i) << " ";
+  //cout << "\n";
 
   GSSmoother M(A);
   PCG(A, M, B, X, 1, 500, 1e-8, 0.0);

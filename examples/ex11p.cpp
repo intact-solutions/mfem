@@ -297,12 +297,13 @@ int main(int argc, char *argv[])
          // convert eigenvector from HypreParVector to ParGridFunction
          x = lobpcg->GetEigenvector(i);
 
-         mode_name << "mode_" << setfill('0') << setw(2) << i << "."
-                   << setfill('0') << setw(6) << myid;
+         mode_name << "mode_" << setfill('0') << setw(2) << i << ".vtk";
 
          ofstream mode_ofs(mode_name.str().c_str());
          mode_ofs.precision(8);
-         x.Save(mode_ofs);
+				 ofstream vtk_ofs(mode_name.str().c_str());
+				 pmesh->PrintVTK(vtk_ofs,1);
+         x.SaveVTK(vtk_ofs,"eigen_vector",1);
          mode_name.str("");
       }
    }

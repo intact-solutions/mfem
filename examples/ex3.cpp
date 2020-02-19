@@ -49,7 +49,7 @@ int dim;
 int main(int argc, char *argv[])
 {
    // 1. Parse command-line options.
-   const char *mesh_file = "../data/beam-tet.mesh";
+   const char *mesh_file = "../data/beam-hex.mesh";
    int order = 1;
    bool static_cond = false;
    bool visualization = 1;
@@ -87,8 +87,12 @@ int main(int argc, char *argv[])
    //    largest number that gives a final mesh with no more than 50,000
    //    elements.
    {
-      int ref_levels =
-         (int)floor(log(50000./mesh->GetNE())/log(2.)/dim);
+#ifdef _DEBUG
+       int ref_levels = 0;
+#else
+       int ref_levels = 3;// (int)floor(log(50000. / mesh->GetNE()) / log(2.) / dim);
+#endif //_DEBUG
+  
       for (int l = 0; l < ref_levels; l++)
       {
          mesh->UniformRefinement();
@@ -114,7 +118,13 @@ int main(int argc, char *argv[])
       ess_bdr = 1;
       fespace->GetEssentialTrueDofs(ess_bdr, ess_tdof_list);
    }
-
+	 cout << "ESSENTIAL DOFS SIZE: " << ess_tdof_list.Size() << "\n";
+#ifdef _DEBUG
+   for (auto element : ess_tdof_list) {
+       cout << element << "\n";
+   }
+#endif
+	 
    // 6. Set up the linear form b(.) which corresponds to the right-hand side
    //    of the FEM linear system, which in this case is (f,phi_i) where f is
    //    given by the function f_exact and phi_i are the basis functions in the
@@ -131,7 +141,8 @@ int main(int argc, char *argv[])
    //    r.h.s. vector b.
    GridFunction x(fespace);
    VectorFunctionCoefficient E(sdim, E_exact);
-   x.ProjectCoefficient(E);
+   //x.ProjectCoefficient(E);
+   x = 0.0;
 
    // 8. Set up the bilinear form corresponding to the EM diffusion operator
    //    curl muinv curl + sigma I, by adding the curl-curl and the mass domain
@@ -170,19 +181,32 @@ int main(int argc, char *argv[])
 
    // 11. Recover the solution as a finite element grid function.
    a->RecoverFEMSolution(X, *b, x);
-
+   
+   /*std::cout << "B vector: \n";
+   B.Print(std::cout);*/
+#ifdef _DEBUG
+   std::cout << "X vector: \n";
+   for (int i = 0; i < X.Size(); i++) {
+       cout << X(i) << "\n";
+   }
+   B.Print();
+#endif
    // 12. Compute and print the L^2 norm of the error.
    cout << "\n|| E_h - E ||_{L^2} = " << x.ComputeL2Error(E) << '\n' << endl;
 
    // 13. Save the refined mesh and the solution. This output can be viewed
    //     later using GLVis: "glvis -m refined.mesh -g sol.gf".
    {
-      ofstream mesh_ofs("refined.mesh");
+      /*ofstream mesh_ofs("refined.mesh");
       mesh_ofs.precision(8);
       mesh->Print(mesh_ofs);
       ofstream sol_ofs("sol.gf");
       sol_ofs.precision(8);
-      x.Save(sol_ofs);
+      x.Save(sol_ofs);*/
+
+			 ofstream vtk_ofs("ex3sol.vtk");
+			 mesh->PrintVTK(vtk_ofs, 1);
+			 x.SaveVTK(vtk_ofs, "electric_field", 1);
    }
 
    // 14. Send the solution by socket to a GLVis server.
