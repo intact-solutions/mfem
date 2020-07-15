@@ -35,6 +35,196 @@
 //               ex1 -pa -d ceed-cuda
 //               ex1 -m ../data/beam-hex.mesh -pa -d cuda
 //
+
+
+#include "mfem.hpp"
+#include <fstream>
+#include <iostream>
+
+using namespace std;
+using namespace mfem;
+
+/*
+ * Solve Nonlinear Problem: -Laplace u + u^2 = f
+ * Exact solution u_exact = sin(2*pi*x)
+ *
+ * Newton Linearization: Given u, solve du
+ * -Laplace du + 2u*du = - F(u), where F(u) = -Laplace u + u^2 - f
+ * */
+
+// u = sin( 2 *  pi * x)
+double u_exact_(const Vector& x)
+{
+  MFEM_ASSERT(x.Size() == 1, "Must be 1D mesh");
+  return sin(2 * M_PI * x[0]);
+}
+
+// -Laplace u + u^2 = f, deduced from analytic solution u_exact
+double f_exact_(const Vector& x)
+{
+  return 4 * M_PI * M_PI * sin(2 * M_PI * x[0]) + sin(2 * M_PI * x[0]) * sin(2 * M_PI * x[0]);
+}
+
+class NLFIntegrator : public NonlinearFormIntegrator
+{
+private:
+  Vector shape;
+  Coefficient* f; // f in F(u)=-Laplace u + u^2 - f
+  DenseMatrix dshape, dshapedxt, invdfdx;
+  Vector vec, pointflux;
+public:
+  NLFIntegrator(Coefficient* f_) : f(f_) {}
+  virtual void AssembleElementVector(const FiniteElement& el,
+    ElementTransformation& Tr,
+    const Vector& elfun,
+    Vector& elvect)
+  {
+    int dof = el.GetDof();
+    int dim = el.GetDim();
+    shape.SetSize(dof);
+    dshape.SetSize(dof, dim);
+    invdfdx.SetSize(dim);
+    vec.SetSize(dim);
+    pointflux.SetSize(dim);
+
+    elvect.SetSize(dof);
+    elvect = 0.0;
+
+    const IntegrationRule* ir = &IntRules.Get(el.GetGeomType(), 2 * el.GetOrder() + Tr.OrderW());
+
+    for (int i = 0; i < ir->GetNPoints(); i++) {
+      const IntegrationPoint& ip = ir->IntPoint(i);
+      el.CalcShape(ip, shape);
+      Tr.SetIntPoint(&ip);
+
+      //Given u, compute (u^2-f, v), v is shape function
+      double fun_val = (elfun * shape) * (elfun * shape) - (*f).Eval(Tr, ip);
+      double w = ip.weight * Tr.Weight() * fun_val;
+      add(elvect, w, shape, elvect);
+
+      // Given u, compute (grad(u), grad(v)), v is shape function. Ref: DiffusionIntegrator::AssembleElementVector()
+      CalcAdjugate(Tr.Jacobian(), invdfdx);
+      dshape.MultTranspose(elfun, vec);
+      invdfdx.MultTranspose(vec, pointflux);
+      double ww = ip.weight / Tr.Weight();
+      pointflux *= ww;
+      invdfdx.Mult(pointflux, vec);
+      dshape.AddMult(vec, elvect);
+    }
+  }
+
+  virtual void AssembleElementGrad(const FiniteElement& el,
+    ElementTransformation& Tr,
+    const Vector& elfun,
+    DenseMatrix& elmat) {
+    int dof = el.GetDof();
+    int dim = el.GetDim();
+    dshapedxt.SetSize(dof, dim);
+    dshape.SetSize(dof, dim);
+    shape.SetSize(dof);
+    elmat.SetSize(dof);
+    elmat = 0.0;
+
+    const IntegrationRule* ir = &IntRules.Get(el.GetGeomType(), 2 * el.GetOrder() + Tr.OrderW());
+
+    for (int i = 0; i < ir->GetNPoints(); i++) {
+      const IntegrationPoint& ip = ir->IntPoint(i);
+      el.CalcShape(ip, shape);
+      el.CalcDShape(ip, dshape);
+      Tr.SetIntPoint(&ip);
+
+      // Compute (grad(du), grad(v)).  Ref: DiffusionIntegrator::AssembleElementMatrix()
+      double w = ip.weight / Tr.Weight();
+      Mult(dshape, Tr.AdjugateJacobian(), dshapedxt); //
+      AddMult_a_AAt(w, dshapedxt, elmat);
+
+      // Compute 2*u*(du,v), v is shape function
+      double fun_val = 2 * (elfun * shape) * ip.weight * Tr.Weight(); // 2*u
+      AddMult_a_VVt(fun_val, shape, elmat); // 2*u*(du, v)
+    }
+  }
+};
+
+class NLOperator : public Operator
+{
+private:
+  NonlinearForm* N;
+  mutable SparseMatrix* Jacobian;
+  Coefficient* f; // f in F(u) = -Laplace u + u^2 - f
+
+public:
+  NLOperator(NonlinearForm* N_, Coefficient* f_, int size) : Operator(size), N(N_), f(f_), Jacobian(NULL) { }
+
+  virtual void Mult(const Vector& x, Vector& y) const
+  {
+    N->Mult(x, y); //Evaluate the action of the NonlinearForm
+    //y.Neg();
+  }
+
+  virtual Operator& GetGradient(const Vector& x) const
+  {
+    Jacobian = dynamic_cast<SparseMatrix*>(&N->GetGradient(x));
+    return *Jacobian;
+  }
+};
+
+
+int main2()
+{
+  Mesh mesh(1, 1.0);
+  int dim = mesh.Dimension();
+
+  H1_FECollection h1_fec(1, dim);
+  FiniteElementSpace h1_space(&mesh, &h1_fec);
+  int size = h1_space.GetVSize();
+
+  Array<int> ess_tdof_list;
+  if (mesh.bdr_attributes.Size()) {
+    Array<int> ess_bdr(mesh.bdr_attributes.Max());
+    ess_bdr = 1;
+    h1_space.GetEssentialTrueDofs(ess_bdr, ess_tdof_list);
+    ess_tdof_list.Print();
+  }
+
+  GridFunction rhs(&h1_space);
+  FunctionCoefficient f_exact_coeff(f_exact_);
+  rhs.ProjectCoefficient(f_exact_coeff);
+
+  ConstantCoefficient one(1.0);
+  NonlinearForm N(&h1_space);
+  N.AddDomainIntegrator(new DiffusionIntegrator(one));
+  N.SetEssentialTrueDofs(ess_tdof_list);
+
+  NLOperator N_oper(&N, &f_exact_coeff, size);
+
+  Solver* J_solver;
+  Solver* J_prec = new DSmoother(1);
+  MINRESSolver* J_minres = new MINRESSolver;
+  J_minres->SetPreconditioner(*J_prec);
+  J_solver = J_minres;
+
+  NewtonSolver newton_solver;
+  newton_solver.SetSolver(*J_solver);
+  newton_solver.SetOperator(N_oper);
+  newton_solver.SetPrintLevel(1);
+  newton_solver.iterative_mode = true;
+
+  GridFunction uh(&h1_space);
+  Vector zero;
+  newton_solver.Mult(zero, uh); //solve the non-linear form with right hand side as zero
+
+  FunctionCoefficient u_exact_coeff(u_exact_);
+  uh.ProjectCoefficient(u_exact_coeff);
+  cout << "L2 error norm: " << uh.ComputeL2Error(u_exact_coeff) << endl;
+
+  // 13. Save the refined mesh and the solution. This output can be viewed later
+   //     using GLVis: "glvis -m refined.mesh -g sol.gf".
+  ofstream mesh_ofs("D:\\OneDrive\\Documents\\VisualStudio2017\\Projects\\mfem\\examples\\solution_mesh.vtk");
+  mesh.PrintVTK(mesh_ofs, 1);
+  uh.SaveVTK(mesh_ofs, "u", 1);
+  return 0;
+}
+
 // Description:  This example code demonstrates the use of MFEM to define a
 //               simple finite element discretization of the Laplace problem
 //               -Delta u = 1 with homogeneous Dirichlet boundary conditions.
@@ -50,13 +240,6 @@
 //               of essential boundary conditions, static condensation, and the
 //               optional connection to the GLVis tool for visualization.
 
-#include "mfem.hpp"
-#include <fstream>
-#include <iostream>
-
-using namespace std;
-using namespace mfem;
-
 int main(int argc, char *argv[])
 {
    // 1. Parse command-line options.
@@ -65,30 +248,30 @@ int main(int argc, char *argv[])
    bool static_cond = false;
    bool pa = false;
    const char *device_config = "cpu";
-   bool visualization = true;
+   bool visualization = false;
 
-   OptionsParser args(argc, argv);
-   args.AddOption(&mesh_file, "-m", "--mesh",
-                  "Mesh file to use.");
-   args.AddOption(&order, "-o", "--order",
-                  "Finite element order (polynomial degree) or -1 for"
-                  " isoparametric space.");
-   args.AddOption(&static_cond, "-sc", "--static-condensation", "-no-sc",
-                  "--no-static-condensation", "Enable static condensation.");
-   args.AddOption(&pa, "-pa", "--partial-assembly", "-no-pa",
-                  "--no-partial-assembly", "Enable Partial Assembly.");
-   args.AddOption(&device_config, "-d", "--device",
-                  "Device configuration string, see Device::Configure().");
-   args.AddOption(&visualization, "-vis", "--visualization", "-no-vis",
-                  "--no-visualization",
-                  "Enable or disable GLVis visualization.");
-   args.Parse();
-   if (!args.Good())
-   {
-      args.PrintUsage(cout);
-      return 1;
-   }
-   args.PrintOptions(cout);
+   //OptionsParser args(argc, argv);
+   //args.AddOption(&mesh_file, "-m", "--mesh",
+   //               "Mesh file to use.");
+   //args.AddOption(&order, "-o", "--order",
+   //               "Finite element order (polynomial degree) or -1 for"
+   //               " isoparametric space.");
+   //args.AddOption(&static_cond, "-sc", "--static-condensation", "-no-sc",
+   //               "--no-static-condensation", "Enable static condensation.");
+   //args.AddOption(&pa, "-pa", "--partial-assembly", "-no-pa",
+   //               "--no-partial-assembly", "Enable Partial Assembly.");
+   //args.AddOption(&device_config, "-d", "--device",
+   //               "Device configuration string, see Device::Configure().");
+   //args.AddOption(&visualization, "-vis", "--visualization", "-no-vis",
+   //               "--no-visualization",
+   //               "Enable or disable GLVis visualization.");
+   //args.Parse();
+   //if (!args.Good())
+   //{
+   //   args.PrintUsage(cout);
+   //   return 1;
+   //}
+   //args.PrintOptions(cout);
 
    // 2. Enable hardware devices such as GPUs, and programming models such as
    //    CUDA, OCCA, RAJA and OpenMP based on command line options.
@@ -98,21 +281,22 @@ int main(int argc, char *argv[])
    // 3. Read the mesh from the given mesh file. We can handle triangular,
    //    quadrilateral, tetrahedral, hexahedral, surface and volume meshes with
    //    the same code.
-   Mesh *mesh = new Mesh(mesh_file, 1, 1);
+   //Mesh *mesh = new Mesh(mesh_file, 1, 1);
+   Mesh *mesh = new Mesh(10, 1.0);
    int dim = mesh->Dimension();
 
    // 4. Refine the mesh to increase the resolution. In this example we do
    //    'ref_levels' of uniform refinement. We choose 'ref_levels' to be the
    //    largest number that gives a final mesh with no more than 50,000
    //    elements.
-   {
-      int ref_levels =
-         (int)floor(log(50000./mesh->GetNE())/log(2.)/dim);
-      for (int l = 0; l < ref_levels; l++)
-      {
-         mesh->UniformRefinement();
-      }
-   }
+   //{
+   //   int ref_levels =
+   //      (int)floor(log(50000./mesh->GetNE())/log(2.)/dim);
+   //   for (int l = 0; l < ref_levels; l++)
+   //   {
+   //      mesh->UniformRefinement();
+   //   }
+   //}
 
    // 5. Define a finite element space on the mesh. Here we use continuous
    //    Lagrange finite elements of the specified order. If order < 1, we
@@ -146,6 +330,8 @@ int main(int argc, char *argv[])
       ess_bdr = 1;
       fespace->GetEssentialTrueDofs(ess_bdr, ess_tdof_list);
    }
+   std::cout << "\nFixed node";
+   ess_tdof_list.Print();
 
    // 7. Set up the linear form b(.) which corresponds to the right-hand side of
    //    the FEM linear system, which in this case is (1,phi_i) where phi_i are
@@ -207,12 +393,18 @@ int main(int argc, char *argv[])
 
    // 13. Save the refined mesh and the solution. This output can be viewed later
    //     using GLVis: "glvis -m refined.mesh -g sol.gf".
-   ofstream mesh_ofs("refined.mesh");
+   /*ofstream mesh_ofs("refined.mesh");
    mesh_ofs.precision(8);
    mesh->Print(mesh_ofs);
    ofstream sol_ofs("sol.gf");
    sol_ofs.precision(8);
-   x.Save(sol_ofs);
+   x.Save(sol_ofs);*/
+
+   // 13. Save the refined mesh and the solution. This output can be viewed later
+ //     using GLVis: "glvis -m refined.mesh -g sol.gf".
+   ofstream mesh_ofs("D:\\OneDrive\\Documents\\VisualStudio2017\\Projects\\mfem\\examples\\solution_linear.vtk");
+   mesh->PrintVTK(mesh_ofs, 1);
+   x.SaveVTK(mesh_ofs, "u", 1);
 
    // 14. Send the solution by socket to a GLVis server.
    if (visualization)
