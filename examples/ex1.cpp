@@ -45,11 +45,11 @@ using namespace std;
 using namespace mfem;
 
 /*
- * Solve Nonlinear Problem: -Laplace u + u^2 = f
+ * Solve Nonlinear Problem: Laplace u + 4*pi^2*u = 0
  * Exact solution u_exact = sin(2*pi*x)
  *
  * Newton Linearization: Given u, solve du
- * -Laplace du + 2u*du = - F(u), where F(u) = -Laplace u + u^2 - f
+ * Laplace du + 4*pi^2*du = dF(u), where F(u) = Laplace u + 4*pi^2*u
  * */
 
 // u = sin( 2 *  pi * x)
@@ -59,21 +59,16 @@ double u_exact_(const Vector& x)
   return sin(2 * M_PI * x[0]);
 }
 
-// -Laplace u + u^2 = f, deduced from analytic solution u_exact
-double f_exact_(const Vector& x)
-{
-  return 4 * M_PI * M_PI * sin(2 * M_PI * x[0]) + sin(2 * M_PI * x[0]) * sin(2 * M_PI * x[0]);
-}
 
 class NLFIntegrator : public NonlinearFormIntegrator
 {
 private:
   Vector shape;
-  Coefficient* f; // f in F(u)=-Laplace u + u^2 - f
   DenseMatrix dshape, dshapedxt, invdfdx;
   Vector vec, pointflux;
+  Coefficient* Q;
 public:
-  NLFIntegrator(Coefficient* f_) : f(f_) {}
+  NLFIntegrator(Coefficient &Q_) :Q(&Q_) {}
   virtual void AssembleElementVector(const FiniteElement& el,
     ElementTransformation& Tr,
     const Vector& elfun,
@@ -86,32 +81,44 @@ public:
     invdfdx.SetSize(dim);
     vec.SetSize(dim);
     pointflux.SetSize(dim);
+    double w;
 
     elvect.SetSize(dof);
     elvect = 0.0;
+
+    std::cout << "u coeff from last iteration: "; elfun.Print();
 
     const IntegrationRule* ir = &IntRules.Get(el.GetGeomType(), 2 * el.GetOrder() + Tr.OrderW());
 
     for (int i = 0; i < ir->GetNPoints(); i++) {
       const IntegrationPoint& ip = ir->IntPoint(i);
+      el.CalcDShape(ip, dshape);
       el.CalcShape(ip, shape);
+
       Tr.SetIntPoint(&ip);
+      CalcAdjugate(Tr.Jacobian(), invdfdx); // invdfdx = adj(J)
+      w = ip.weight / Tr.Weight();
 
-      //Given u, compute (u^2-f, v), v is shape function
-      double fun_val = (elfun * shape) * (elfun * shape) - (*f).Eval(Tr, ip);
-      double w = ip.weight * Tr.Weight() * fun_val;
-      add(elvect, w, shape, elvect);
-
-      // Given u, compute (grad(u), grad(v)), v is shape function. Ref: DiffusionIntegrator::AssembleElementVector()
-      CalcAdjugate(Tr.Jacobian(), invdfdx);
       dshape.MultTranspose(elfun, vec);
       invdfdx.MultTranspose(vec, pointflux);
-      double ww = ip.weight / Tr.Weight();
-      pointflux *= ww;
+      if (Q)
+      {
+        w *= Q->Eval(Tr, ip);
+      }
+           
+      pointflux *= w;
       invdfdx.Mult(pointflux, vec);
       dshape.AddMult(vec, elvect);
+      std::cout << "elem vector after adding diffusion: "; elvect.Print();
+      //Given u, compute (-f, v), v is shape function, 
+      //or \integration -f*shape 
+      double fun_val = -1; //4 * M_PI * M_PI * (elfun * shape); //the last product computes the current solution
+      //w = ip.weight / Tr.Weight() * fun_val;
+      w = ip.weight * Tr.Weight();
+      add(elvect, w * fun_val, shape, elvect);
+      std::cout << "elem vector after adding load rhs: "; elvect.Print();
     }
-  }
+  } 
 
   virtual void AssembleElementGrad(const FiniteElement& el,
     ElementTransformation& Tr,
@@ -139,8 +146,8 @@ public:
       AddMult_a_AAt(w, dshapedxt, elmat);
 
       // Compute 2*u*(du,v), v is shape function
-      double fun_val = 2 * (elfun * shape) * ip.weight * Tr.Weight(); // 2*u
-      AddMult_a_VVt(fun_val, shape, elmat); // 2*u*(du, v)
+      //double fun_val = 2 * (elfun * shape) * ip.weight * Tr.Weight(); // 2*u
+      //AddMult_a_VVt(fun_val, shape, elmat); // 2*u*(du, v)
     }
   }
 };
@@ -157,21 +164,30 @@ public:
 
   virtual void Mult(const Vector& x, Vector& y) const
   {
+    cout << "\nIn NLOperator (before)";
+    cout << "\nx print: "; x.Print();
+    cout << "\ny print: "; y.Print();
     N->Mult(x, y); //Evaluate the action of the NonlinearForm
     //y.Neg();
+    cout << "\nIn NLOperator (after)";
+    cout << "\nx print: "; x.Print();
+    cout << "\ny print: "; y.Print();
   }
 
   virtual Operator& GetGradient(const Vector& x) const
   {
     Jacobian = dynamic_cast<SparseMatrix*>(&N->GetGradient(x));
+    std::cout << "\nJacobian: "; Jacobian->Print();
     return *Jacobian;
   }
 };
 
 
-int main2()
+int main()
 {
-  Mesh mesh(1, 1.0);
+  Mesh mesh(2, 1.0);
+  auto vertices = mesh.GetVertex(1);
+  std::cout << "Vertex 1: " << vertices[0] << ", " << vertices[1] << ", " << vertices[2] << "\n";
   int dim = mesh.Dimension();
 
   H1_FECollection h1_fec(1, dim);
@@ -183,43 +199,52 @@ int main2()
     Array<int> ess_bdr(mesh.bdr_attributes.Max());
     ess_bdr = 1;
     h1_space.GetEssentialTrueDofs(ess_bdr, ess_tdof_list);
+    cout << "\nessential dofs: ";
     ess_tdof_list.Print();
   }
 
-  GridFunction rhs(&h1_space);
-  FunctionCoefficient f_exact_coeff(f_exact_);
-  rhs.ProjectCoefficient(f_exact_coeff);
-
+  //GridFunction rhs(&h1_space);
+  //FunctionCoefficient f_exact_coeff(f_exact_);
+  //rhs.ProjectCoefficient(f_exact_coeff);
+ 
   ConstantCoefficient one(1.0);
+  ConstantCoefficient f_coeff(1);
   NonlinearForm N(&h1_space);
-  N.AddDomainIntegrator(new DiffusionIntegrator(one));
+  N.AddDomainIntegrator(new NLFIntegrator(one));
   N.SetEssentialTrueDofs(ess_tdof_list);
-
-  NLOperator N_oper(&N, &f_exact_coeff, size);
+  // N.SetEssentialBC(ess_tdof_list, rhs);
+  NLOperator N_oper(&N, &f_coeff, size);
 
   Solver* J_solver;
   Solver* J_prec = new DSmoother(1);
   MINRESSolver* J_minres = new MINRESSolver;
+  J_minres->SetRelTol(1e-12);
+  J_minres->SetAbsTol(1e-12);
+  J_minres->SetMaxIter(200);
   J_minres->SetPreconditioner(*J_prec);
   J_solver = J_minres;
 
   NewtonSolver newton_solver;
+  newton_solver.SetRelTol(1e-12);
+  newton_solver.SetAbsTol(1e-12);
+  newton_solver.SetMaxIter(200);
   newton_solver.SetSolver(*J_solver);
   newton_solver.SetOperator(N_oper);
   newton_solver.SetPrintLevel(1);
-  newton_solver.iterative_mode = true;
+  newton_solver.iterative_mode = false;
 
   GridFunction uh(&h1_space);
-  Vector zero;
+  Vector zero(size);
+  zero = 0.0;
   newton_solver.Mult(zero, uh); //solve the non-linear form with right hand side as zero
 
   FunctionCoefficient u_exact_coeff(u_exact_);
-  uh.ProjectCoefficient(u_exact_coeff);
+  //uh.ProjectCoefficient(u_exact_coeff);
   cout << "L2 error norm: " << uh.ComputeL2Error(u_exact_coeff) << endl;
 
   // 13. Save the refined mesh and the solution. This output can be viewed later
    //     using GLVis: "glvis -m refined.mesh -g sol.gf".
-  ofstream mesh_ofs("D:\\OneDrive\\Documents\\VisualStudio2017\\Projects\\mfem\\examples\\solution_mesh.vtk");
+  ofstream mesh_ofs("D:\\OneDrive\\Documents\\VisualStudio2017\\Projects\\mfem\\examples\\solution_nonlinear.vtk");
   mesh.PrintVTK(mesh_ofs, 1);
   uh.SaveVTK(mesh_ofs, "u", 1);
   return 0;
@@ -240,7 +265,7 @@ int main2()
 //               of essential boundary conditions, static condensation, and the
 //               optional connection to the GLVis tool for visualization.
 
-int main(int argc, char *argv[])
+int main2(int argc, char *argv[])
 {
    // 1. Parse command-line options.
    const char *mesh_file = "../data/star.mesh";
