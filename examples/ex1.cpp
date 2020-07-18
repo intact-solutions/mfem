@@ -44,25 +44,52 @@
 using namespace std;
 using namespace mfem;
 
-/*
+/*Example 1:
  * Solve Nonlinear Problem: -Laplace u + u^2 - f = 0
- * Exact solution u_exact = sin(2*pi*x)
+ * f specified to have exact solution u_exact = sin(2*pi*x)
  *
  * Newton Linearization: Given u, solve du
  *-Laplace du + 2u*du = - F(u), where F(u) = -Laplace u + u^2 - f
+ *
+ *Example 2:
+ * Solve nonlinear problem -div(u grad u) - f = 0
+ * f specified to have exact solution u_exact = sin(4*pi*x)
  * */
 
- // u = sin( 2 *  pi * x)
-double u_exact_(const Vector& x)
+int example = 1; //supports case 1 and 2
+
+double u_exact(const Vector& x)
 {
-  MFEM_ASSERT(x.Size() == 1, "Must be 1D mesh");
-  return sin(2 * M_PI * x[0]);
+  if (example == 1) { // u = sin( 2 *  pi * x)
+    MFEM_ASSERT(x.Size() == 1, "Must be 1D mesh");
+    return sin(2 * M_PI * x[0]);
+  }
+  else if (example == 2) {
+    MFEM_ASSERT(x.Size() == 1, "Must be 1D mesh");
+    return sin(1 * M_PI * x[0]);
+  }
+  else {
+    MFEM_ABORT("Wrong Example");
+    return 0;
+  }
 }
 
 // -Laplace u + u^2 = f, deduced from analytic solution u_exact
-double f_exact_(const Vector& x)
+double f_exact(const Vector& x)
 {
-  return 4 * M_PI * M_PI * sin(2 * M_PI * x[0]) + sin(2 * M_PI * x[0]) * sin(2 * M_PI * x[0]);
+  if (example == 1) {
+    return 4 * M_PI * M_PI * sin(2 * M_PI * x[0]) + sin(2 * M_PI * x[0]) * sin(2 * M_PI * x[0]);
+  }
+  else if (example == 2) {  
+    double a = 1;
+    return a*a * M_PI * M_PI * 
+      (cos(a * M_PI * x[0])* cos(a * M_PI * x[0]) 
+        - sin(a * M_PI * x[0]) * sin(a * M_PI * x[0]));
+  }
+  else {
+    MFEM_ABORT("Wrong Example");
+    return 0;
+  }
 }
 
 
@@ -103,28 +130,37 @@ public:
       el.CalcShape(ip, shape);
 
       Tr.SetIntPoint(&ip);
-      CalcAdjugate(Tr.Jacobian(), invdfdx); // invdfdx = adj(J)
-      w = ip.weight / Tr.Weight();
+      CalcAdjugate(Tr.Jacobian(), invdfdx); // invdfdx = adj(J)     
 
       dshape.MultTranspose(elfun, vec);
       invdfdx.MultTranspose(vec, pointflux);
-     /* if (Q)
-      {
-        w *= Q->Eval(Tr, ip);
-      }*/
-           
+
+      w = ip.weight / Tr.Weight();
+      if (example == 2)
+        w *= (elfun * shape); //coeff a=u in a*grad(u)
+   
       pointflux *= w;
       invdfdx.Mult(pointflux, vec);
       dshape.AddMult(vec, elvect);
-      std::cout << "elem vector after adding diffusion: "; elvect.Print();
-      //Given u, compute (u^2-f, v), v is shape function
-      //or \integration (u^2-f)*shape 
-      //double fun_val = -1; //4 * M_PI * M_PI * (elfun * shape); //the last product computes the current solution
-      double fun_val = (elfun * shape) * (elfun * shape) - (*f).Eval(Tr, ip);
-      //w = ip.weight / Tr.Weight() * fun_val;
-      w = ip.weight * Tr.Weight();
-      add(elvect, w * fun_val, shape, elvect);
-      std::cout << "elem vector after adding load rhs: "; elvect.Print();
+      
+      if (example == 1){
+        //compute (u0^2-f, v), v is shape function, u0 is known disp from last iteration
+        //or \integration (u0^2-f)*shape
+        double fun_val = (elfun * shape) * (elfun * shape) - (*f).Eval(Tr, ip);
+        //w = ip.weight / Tr.Weight() * fun_val;
+        w = ip.weight * Tr.Weight();
+        add(elvect, w * fun_val, shape, elvect);
+      } else if (example == 2) {        
+        Vector dshape_x;
+        dshape.GetRow(0, dshape_x);     
+
+        //compute (-f, v)
+        double fun_val = -1.0 * (*f).Eval(Tr, ip);        
+        w = ip.weight * Tr.Weight();
+        add(elvect, w * fun_val, shape, elvect);
+      }
+
+      
     }
   } 
 
@@ -136,7 +172,7 @@ public:
     int dim = el.GetDim();
     dshapedxt.SetSize(dof, dim);
     dshape.SetSize(dof, dim);
-    shape.SetSize(dof);
+    shape.SetSize(dof);    
     elmat.SetSize(dof);
     elmat = 0.0;
 
@@ -148,14 +184,39 @@ public:
       el.CalcDShape(ip, dshape);
       Tr.SetIntPoint(&ip);
 
-      // Compute (grad(du), grad(v)).  Ref: DiffusionIntegrator::AssembleElementMatrix()
+      // Compute (grad(du), grad(v)). du is small change u = u0 + du Ref: DiffusionIntegrator::AssembleElementMatrix()
       double w = ip.weight / Tr.Weight();
+
+      if (example == 2)
+        w *= (elfun * shape); //coeff a=u0 in a*grad(u)
+
       Mult(dshape, Tr.AdjugateJacobian(), dshapedxt); //
       AddMult_a_AAt(w, dshapedxt, elmat);
 
-      // Compute 2*u*(du,v), v is shape function
-      double fun_val = 2 * (elfun * shape) * ip.weight * Tr.Weight(); // 2*u
-      AddMult_a_VVt(fun_val, shape, elmat); // 2*u*(du, v)
+      if (example == 1) {
+        // Compute 2*u*(du,v), v is shape function
+        double fun_val = 2 * (elfun * shape) * ip.weight * Tr.Weight(); // 2*u
+        AddMult_a_VVt(fun_val, shape, elmat); // 2*u*(du, v)
+      } else if (example == 2) {
+        // Compute (c*u, grad(v)). c = grad(du0), v is shape function
+        Vector dshape_x;
+        dshape.GetRow(0, dshape_x);
+        double c = 1;
+        //auto c = (elfun * dshape);
+        //dshape.Mult()
+        
+        DenseMatrix shape_mat(dof, dim);        
+        shape_mat.SetCol(0, shape);
+        double w = c * ip.weight / Tr.Weight();
+        Mult(dshape, Tr.AdjugateJacobian(), dshapedxt); //
+        std::cout << "\nel mat before: ";  elmat.Print();
+        AddMult_a_ABt(w, shape_mat, dshapedxt, elmat);
+        //AddMult_a_AAt(w, dshapedxt, elmat);
+        std::cout << "\nShape: "; shape_mat.Print();
+        std::cout << "\nder Shape: "; dshape.Print();
+        std::cout << "\nder Shape scaled: "; dshapedxt.Print();
+        std::cout << "\nel mat: ";  elmat.Print();
+      }
     }
   }
 };
@@ -171,15 +232,8 @@ public:
   NLOperator(NonlinearForm* N_, Coefficient* f_, int size) : Operator(size), N(N_), f(f_), Jacobian(NULL) { }
 
   virtual void Mult(const Vector& x, Vector& y) const
-  {
-    cout << "\nIn NLOperator (before)";
-    cout << "\nx print: "; x.Print();
-    cout << "\ny print: "; y.Print();
-    N->Mult(x, y); //Evaluate the action of the NonlinearForm
-    //y.Neg();
-    cout << "\nIn NLOperator (after)";
-    cout << "\nx print: "; x.Print();
-    cout << "\ny print: "; y.Print();
+  {    
+    N->Mult(x, y); //Evaluate the action of the NonlinearForm   
   }
 
   virtual Operator& GetGradient(const Vector& x) const
@@ -192,10 +246,10 @@ public:
 
 
 int main()
-{
-  Mesh mesh(20, 1.0);
+{ 
+  example = 2;
+  Mesh mesh(2, 1.0); //create a unit length (end arg) mesh with 20 (1st arg)element
   auto vertices = mesh.GetVertex(1);
-  std::cout << "Vertex 1: " << vertices[0] << ", " << vertices[1] << ", " << vertices[2] << "\n";
   int dim = mesh.Dimension();
 
   H1_FECollection h1_fec(1, dim);
@@ -212,7 +266,7 @@ int main()
   }
 
   GridFunction rhs(&h1_space);
-  FunctionCoefficient f_exact_coeff(f_exact_);
+  FunctionCoefficient f_exact_coeff(f_exact);
   //rhs.ProjectCoefficient(f_exact_coeff);
  
   ConstantCoefficient one(1.0);
@@ -246,7 +300,7 @@ int main()
   zero = 0.0;
   newton_solver.Mult(zero, uh); //solve the non-linear form with right hand side as zero
 
-  FunctionCoefficient u_exact_coeff(u_exact_);
+  FunctionCoefficient u_exact_coeff(u_exact);
   //uh.ProjectCoefficient(u_exact_coeff);
   cout << "L2 error norm: " << uh.ComputeL2Error(u_exact_coeff) << endl;
 
