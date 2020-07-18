@@ -45,19 +45,26 @@ using namespace std;
 using namespace mfem;
 
 /*
- * Solve Nonlinear Problem: Laplace u + 4*pi^2*u = 0
+ * Solve Nonlinear Problem: -Laplace u + u^2 - f = 0
  * Exact solution u_exact = sin(2*pi*x)
  *
  * Newton Linearization: Given u, solve du
- * Laplace du + 4*pi^2*du = dF(u), where F(u) = Laplace u + 4*pi^2*u
+ *-Laplace du + 2u*du = - F(u), where F(u) = -Laplace u + u^2 - f
  * */
 
-// u = sin( 2 *  pi * x)
+ // u = sin( 2 *  pi * x)
 double u_exact_(const Vector& x)
 {
   MFEM_ASSERT(x.Size() == 1, "Must be 1D mesh");
   return sin(2 * M_PI * x[0]);
 }
+
+// -Laplace u + u^2 = f, deduced from analytic solution u_exact
+double f_exact_(const Vector& x)
+{
+  return 4 * M_PI * M_PI * sin(2 * M_PI * x[0]) + sin(2 * M_PI * x[0]) * sin(2 * M_PI * x[0]);
+}
+
 
 
 class NLFIntegrator : public NonlinearFormIntegrator
@@ -66,9 +73,9 @@ private:
   Vector shape;
   DenseMatrix dshape, dshapedxt, invdfdx;
   Vector vec, pointflux;
-  Coefficient* Q;
+  Coefficient* f;
 public:
-  NLFIntegrator(Coefficient &Q_) :Q(&Q_) {}
+  NLFIntegrator(Coefficient &Q_) :f(&Q_) {}
   virtual void AssembleElementVector(const FiniteElement& el,
     ElementTransformation& Tr,
     const Vector& elfun,
@@ -101,18 +108,19 @@ public:
 
       dshape.MultTranspose(elfun, vec);
       invdfdx.MultTranspose(vec, pointflux);
-      if (Q)
+     /* if (Q)
       {
         w *= Q->Eval(Tr, ip);
-      }
+      }*/
            
       pointflux *= w;
       invdfdx.Mult(pointflux, vec);
       dshape.AddMult(vec, elvect);
       std::cout << "elem vector after adding diffusion: "; elvect.Print();
-      //Given u, compute (-f, v), v is shape function, 
-      //or \integration -f*shape 
-      double fun_val = -1; //4 * M_PI * M_PI * (elfun * shape); //the last product computes the current solution
+      //Given u, compute (u^2-f, v), v is shape function
+      //or \integration (u^2-f)*shape 
+      //double fun_val = -1; //4 * M_PI * M_PI * (elfun * shape); //the last product computes the current solution
+      double fun_val = (elfun * shape) * (elfun * shape) - (*f).Eval(Tr, ip);
       //w = ip.weight / Tr.Weight() * fun_val;
       w = ip.weight * Tr.Weight();
       add(elvect, w * fun_val, shape, elvect);
@@ -146,8 +154,8 @@ public:
       AddMult_a_AAt(w, dshapedxt, elmat);
 
       // Compute 2*u*(du,v), v is shape function
-      //double fun_val = 2 * (elfun * shape) * ip.weight * Tr.Weight(); // 2*u
-      //AddMult_a_VVt(fun_val, shape, elmat); // 2*u*(du, v)
+      double fun_val = 2 * (elfun * shape) * ip.weight * Tr.Weight(); // 2*u
+      AddMult_a_VVt(fun_val, shape, elmat); // 2*u*(du, v)
     }
   }
 };
@@ -185,7 +193,7 @@ public:
 
 int main()
 {
-  Mesh mesh(2, 1.0);
+  Mesh mesh(20, 1.0);
   auto vertices = mesh.GetVertex(1);
   std::cout << "Vertex 1: " << vertices[0] << ", " << vertices[1] << ", " << vertices[2] << "\n";
   int dim = mesh.Dimension();
@@ -203,14 +211,14 @@ int main()
     ess_tdof_list.Print();
   }
 
-  //GridFunction rhs(&h1_space);
-  //FunctionCoefficient f_exact_coeff(f_exact_);
+  GridFunction rhs(&h1_space);
+  FunctionCoefficient f_exact_coeff(f_exact_);
   //rhs.ProjectCoefficient(f_exact_coeff);
  
   ConstantCoefficient one(1.0);
   ConstantCoefficient f_coeff(1);
   NonlinearForm N(&h1_space);
-  N.AddDomainIntegrator(new NLFIntegrator(one));
+  N.AddDomainIntegrator(new NLFIntegrator(f_exact_coeff));
   N.SetEssentialTrueDofs(ess_tdof_list);
   // N.SetEssentialBC(ess_tdof_list, rhs);
   NLOperator N_oper(&N, &f_coeff, size);
@@ -245,8 +253,13 @@ int main()
   // 13. Save the refined mesh and the solution. This output can be viewed later
    //     using GLVis: "glvis -m refined.mesh -g sol.gf".
   ofstream mesh_ofs("D:\\OneDrive\\Documents\\VisualStudio2017\\Projects\\mfem\\examples\\solution_nonlinear.vtk");
-  mesh.PrintVTK(mesh_ofs, 1);
+  mesh.PrintVTK(mesh_ofs, 1, 0);
   uh.SaveVTK(mesh_ofs, "u", 1);
+
+  //ofstream mesh_ofs_ref("D:\\OneDrive\\Documents\\VisualStudio2017\\Projects\\mfem\\examples\\solution_reference.vtk");
+  //mesh.PrintVTK(mesh_ofs_ref, 1);
+  uh.ProjectCoefficient(u_exact_coeff);
+  uh.SaveVTK(mesh_ofs, "u_ref", 1);
   return 0;
 }
 
