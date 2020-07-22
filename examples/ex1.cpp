@@ -119,12 +119,10 @@ public:
       invdfdx.MultTranspose(vec, pointflux);
 
       double a0 = elfun * shape;
-      w *= a0;
-      //cout << "\na0: " << a0;
+      w *= a0;      
 
-      pointflux *= w;
-      invdfdx.Mult(pointflux, vec);
-      dshape.AddMult(vec, elvect);
+      pointflux *= w;      
+      dshapedxt.AddMult(pointflux, elvect);
       //std::cout << "\nelem vector after adding diffusion: "; elvect.Print();
       //Given u, compute (-f, v), v is shape function or \integration (-f)*shape 
       double fun_val =  - (*f).Eval(Tr, ip);      
@@ -162,18 +160,22 @@ public:
       AddMult_a_AAt(w, dshapedxt, elmat);
       //cout << "elmat from first integrator: "; elmat.Print();
       // Compute (da0 u grad(u_o), grad(v)).  Ref: DiffusionIntegrator::AssembleElementMatrix()
-      double da0 = 1; //du/du = 1
-      w = ip.weight / Tr.Weight(); //reset weight
+      double da0 = 1; //d/du(u) = 1
+      w = ip.weight / (Tr.Weight()); //reset weight
       w *= da0;
       dshape.MultTranspose(elfun, vec);
       invdfdx.MultTranspose(vec, pointflux);
       pointflux *= w;
       //invdfdx.Mult(pointflux, vec);
       //dshape.AddMult(vec, elvect);
-      DenseMatrix first_term(dof, dim), elmat2(dof, dof);
+      /*DenseMatrix first_term(dof, dim), elmat2(dof, dof);
       MultVWt(shape, pointflux, first_term);
-      AddMultABt(first_term, dshapedxt, elmat);
-      MultABt(first_term, dshapedxt, elmat2);
+      AddMultABt(first_term, dshapedxt, elmat);*/
+
+      DenseMatrix first_term(dim, dof), elmat2(dof, dof);
+      MultVWt(pointflux, shape, first_term);
+      AddMult(dshapedxt, first_term, elmat);
+      //MultABt(first_term, dshapedxt, elmat2);
       //cout << "elmat from second integrator: "; elmat2.Print();
       //cout << "total elmat for an element: "; elmat.Print();
     }
@@ -225,9 +227,8 @@ public:
         w *= Q->Eval(Tr, ip);
       }*/
            
-      pointflux *= w;
-      invdfdx.Mult(pointflux, vec);
-      dshape.AddMult(vec, elvect);
+      pointflux *= w;      
+      dshapedxt.AddMult(pointflux, elvect);
       //std::cout << "elem vector after adding diffusion: "; elvect.Print();
       //Given u, compute (u^2-f, v), v is shape function
       //or \integration (u^2-f)*shape 
@@ -300,9 +301,9 @@ public:
 
 int main()
 {
-  c = 1;
+  c = 2;
   example = 2;
-  Mesh mesh(2, 1.0);
+  Mesh mesh(20, 1.0);
   int dim = mesh.Dimension();
 
   H1_FECollection h1_fec(1, dim);
@@ -341,9 +342,9 @@ int main()
   J_solver = J_minres;
 
   NewtonSolver newton_solver;
-  newton_solver.SetRelTol(1e-5);
-  newton_solver.SetAbsTol(1e-5);
-  newton_solver.SetMaxIter(200);
+  newton_solver.SetRelTol(1e-10);
+  newton_solver.SetAbsTol(1e-10);
+  newton_solver.SetMaxIter(400);
   newton_solver.SetSolver(*J_solver);
   newton_solver.SetOperator(N_oper);
   newton_solver.SetPrintLevel(1);
@@ -352,7 +353,7 @@ int main()
   GridFunction uh(&h1_space);
 
   //for non-zero initial value (still must satisfy essential boundary condition)
-  ConstantCoefficient const_coeff(0.01);
+  ConstantCoefficient const_coeff(1.0);
   uh.ProjectCoefficient(const_coeff);
   for(auto & e_i : ess_tdof_list)
     uh[e_i] = 0.0;
