@@ -53,38 +53,26 @@ using namespace mfem;
  *
  *Example 2:
  * Solve nonlinear problem -div(u grad u) - f = 0
- * f specified to have exact solution u_exact = sin(4*pi*x)
+ * f specified to have exact solution u_exact = sin(c*pi*x)
  * */
 
-int example = 1; //supports case 1 and 2
-
+int example; //set example in main. supports case 1 and 2
+double c = 0; // set coef c in main
 double u_exact(const Vector& x)
 {
-  if (example == 1) { // u = sin( 2 *  pi * x)
-    MFEM_ASSERT(x.Size() == 1, "Must be 1D mesh");
-    return sin(2 * M_PI * x[0]);
-  }
-  else if (example == 2) {
-    MFEM_ASSERT(x.Size() == 1, "Must be 1D mesh");
-    return sin(1 * M_PI * x[0]);
-  }
-  else {
-    MFEM_ABORT("Wrong Example");
-    return 0;
-  }
+  MFEM_ASSERT(x.Size() == 1, "Must be 1D mesh");
+  return sin(c * M_PI * x[0]);  
 }
 
-// -Laplace u + u^2 = f, deduced from analytic solution u_exact
+
 double f_exact(const Vector& x)
 {
-  if (example == 1) {
-    return 4 * M_PI * M_PI * sin(2 * M_PI * x[0]) + sin(2 * M_PI * x[0]) * sin(2 * M_PI * x[0]);
+  if (example == 1) {// -Laplace u + u^2 = f, deduced from analytic solution u_exact
+    return 4 * M_PI * M_PI * sin(c * M_PI * x[0]) + sin(c * M_PI * x[0]) * sin(c * M_PI * x[0]);
   }
-  else if (example == 2) {  
-    double a = 1;
-    return a*a * M_PI * M_PI * 
-      (cos(a * M_PI * x[0])* cos(a * M_PI * x[0]) 
-        - sin(a * M_PI * x[0]) * sin(a * M_PI * x[0]));
+  else if (example == 2) {     //-div(u grad u) = f
+    double cos_term = cos(c * M_PI * x[0]), sin_term = sin(c * M_PI * x[0]);
+    return c * c * M_PI * M_PI * (sin_term*sin_term - cos_term * cos_term);
   }
   else {
     MFEM_ABORT("Wrong Example");
@@ -136,8 +124,10 @@ public:
       invdfdx.MultTranspose(vec, pointflux);
 
       w = ip.weight / Tr.Weight();
-      if (example == 2)
-        w *= (elfun * shape); //coeff a=u in a*grad(u)
+      if (example == 2) {
+        double a = (elfun * shape); //coeff a=u0 in a*grad(u)
+        w *= a;
+      }
    
       pointflux *= w;
       invdfdx.Mult(pointflux, vec);
@@ -158,9 +148,7 @@ public:
         double fun_val = -1.0 * (*f).Eval(Tr, ip);        
         w = ip.weight * Tr.Weight();
         add(elvect, w * fun_val, shape, elvect);
-      }
-
-      
+      }      
     }
   } 
 
@@ -172,26 +160,32 @@ public:
     int dim = el.GetDim();
     dshapedxt.SetSize(dof, dim);
     dshape.SetSize(dof, dim);
-    shape.SetSize(dof);    
+    shape.SetSize(dof);
+    invdfdx.SetSize(dim);
     elmat.SetSize(dof);
     elmat = 0.0;
 
     const IntegrationRule* ir = &IntRules.Get(el.GetGeomType(), 2 * el.GetOrder() + Tr.OrderW());
-
+    cout << "\nelfun: "; elfun.Print();
     for (int i = 0; i < ir->GetNPoints(); i++) {
       const IntegrationPoint& ip = ir->IntPoint(i);
       el.CalcShape(ip, shape);
       el.CalcDShape(ip, dshape);
       Tr.SetIntPoint(&ip);
+      cout << "\nshape "; shape.Print();
 
       // Compute (grad(du), grad(v)). du is small change u = u0 + du Ref: DiffusionIntegrator::AssembleElementMatrix()
       double w = ip.weight / Tr.Weight();
 
-      if (example == 2)
-        w *= (elfun * shape); //coeff a=u0 in a*grad(u)
-
-      Mult(dshape, Tr.AdjugateJacobian(), dshapedxt); //
+      if (example == 2) {
+        double a = (elfun * shape); //coeff a=u0 in a*grad(u)
+        cout << "\na: " << a;
+        w *= a;
+      }      
+      //cout << "\nAdjugateJacobian: ";  Tr.AdjugateJacobian().Print();
+      Mult(dshape, Tr.AdjugateJacobian(), dshapedxt);
       AddMult_a_AAt(w, dshapedxt, elmat);
+      cout << "\nelmat after adding 1st term "; elmat.Print();
 
       if (example == 1) {
         // Compute 2*u*(du,v), v is shape function
@@ -199,23 +193,22 @@ public:
         AddMult_a_VVt(fun_val, shape, elmat); // 2*u*(du, v)
       } else if (example == 2) {
         // Compute (c*u, grad(v)). c = grad(du0), v is shape function
-        Vector dshape_x;
-        dshape.GetRow(0, dshape_x);
-        double c = 1;
-        //auto c = (elfun * dshape);
-        //dshape.Mult()
+        w = ip.weight / Tr.Weight(); //reset weight
+        CalcAdjugate(Tr.Jacobian(), invdfdx); // invdfdx = adj(J)        
+        //cout << "\ninvdfdx "; invdfdx.Print();
+        dshape.MultTranspose(elfun, vec);
+        invdfdx.MultTranspose(vec, pointflux); //pointflux = du_0 (derivative of Temp field from last iteration). pointflux formulation from diffusion integrator bilinear form
+        pointflux *= (1/ Tr.Weight()); //the derivative is scaled in real csys
         
-        DenseMatrix shape_mat(dof, dim);        
-        shape_mat.SetCol(0, shape);
-        double w = c * ip.weight / Tr.Weight();
-        Mult(dshape, Tr.AdjugateJacobian(), dshapedxt); //
-        std::cout << "\nel mat before: ";  elmat.Print();
-        AddMult_a_ABt(w, shape_mat, dshapedxt, elmat);
-        //AddMult_a_AAt(w, dshapedxt, elmat);
-        std::cout << "\nShape: "; shape_mat.Print();
-        std::cout << "\nder Shape: "; dshape.Print();
-        std::cout << "\nder Shape scaled: "; dshapedxt.Print();
-        std::cout << "\nel mat: ";  elmat.Print();
+        double da_0 = 1; //(since a(u) = u) derivitive of coeff from last iteration
+        DenseMatrix elmat_term1(dof,1);
+       
+        cout << "\nPointflux "; pointflux.Print();
+        MultVWt(shape, pointflux, elmat_term1);
+        cout << "\nelmat_term1 "; elmat_term1.Print();
+        dshapedxt *= w;
+        AddMult(elmat_term1, dshapedxt, elmat); //
+        cout << "\nelmat after adding 2nd term "; elmat.Print();
       }
     }
   }
@@ -247,7 +240,8 @@ public:
 
 int main()
 { 
-  example = 2;
+  c = 1;
+  example = 1;
   Mesh mesh(2, 1.0); //create a unit length (end arg) mesh with 20 (1st arg)element
   auto vertices = mesh.GetVertex(1);
   int dim = mesh.Dimension();
@@ -269,7 +263,6 @@ int main()
   FunctionCoefficient f_exact_coeff(f_exact);
   //rhs.ProjectCoefficient(f_exact_coeff);
  
-  ConstantCoefficient one(1.0);
   ConstantCoefficient f_coeff(1);
   NonlinearForm N(&h1_space);
   N.AddDomainIntegrator(new NLFIntegrator(f_exact_coeff));
@@ -296,6 +289,9 @@ int main()
   newton_solver.iterative_mode = false;
 
   GridFunction uh(&h1_space);
+  
+  ConstantCoefficient constval(0.0);
+  //uh.ProjectCoefficient(constval);
   Vector zero(size);
   zero = 0.0;
   newton_solver.Mult(zero, uh); //solve the non-linear form with right hand side as zero
