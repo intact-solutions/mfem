@@ -52,19 +52,133 @@ using namespace mfem;
  *-Laplace du + 2u*du = - F(u), where F(u) = -Laplace u + u^2 - f
  * */
 
- // u = sin( 2 *  pi * x)
+
+int c;
+int example;
+// u = sin( c *  pi * x)
 double u_exact_(const Vector& x)
 {
   MFEM_ASSERT(x.Size() == 1, "Must be 1D mesh");
-  return sin(2 * M_PI * x[0]);
+  return sin(c * M_PI * x[0]);
 }
 
-// -Laplace u + u^2 = f, deduced from analytic solution u_exact
+
 double f_exact_(const Vector& x)
 {
-  return 4 * M_PI * M_PI * sin(2 * M_PI * x[0]) + sin(2 * M_PI * x[0]) * sin(2 * M_PI * x[0]);
+  if (example == 1)// -Laplace u + u^2 = f, deduced from analytic solution u_exact
+    return c * c * M_PI * M_PI * sin(c * M_PI * x[0]) + sin(c * M_PI * x[0]) * sin(c * M_PI * x[0]);
+  else if (example == 2)// -div(u du) = f, deduced from analytic solution u_exact
+    return c * c * M_PI * M_PI 
+    * ( sin(c * M_PI * x[0]) * sin(c * M_PI * x[0]) 
+      - cos(c * M_PI * x[0]) * cos(c * M_PI * x[0]));
+  else
+    MFEM_ABORT("Wrong example");
 }
 
+
+class NLFIntegrator_Coeff : public NonlinearFormIntegrator
+{
+private:
+  Vector shape;
+  DenseMatrix dshape, dshapedxt, invdfdx;
+  Vector vec, pointflux;
+  Coefficient* f;
+public:
+  NLFIntegrator_Coeff(Coefficient& Q_) :f(&Q_) {}
+  virtual void AssembleElementVector(const FiniteElement& el,
+    ElementTransformation& Tr,
+    const Vector& elfun,
+    Vector& elvect)
+  {
+    int dof = el.GetDof();
+    int dim = el.GetDim();
+    shape.SetSize(dof);
+    dshape.SetSize(dof, dim);
+    invdfdx.SetSize(dim);
+    vec.SetSize(dim);
+    pointflux.SetSize(dim);
+    double w;
+
+    elvect.SetSize(dof);
+    elvect = 0.0;
+
+    //std::cout << "\nu coeff from last iteration: "; elfun.Print();
+
+    const IntegrationRule* ir = &IntRules.Get(el.GetGeomType(), 2 * el.GetOrder() + Tr.OrderW());
+
+    for (int i = 0; i < ir->GetNPoints(); i++) {
+      const IntegrationPoint& ip = ir->IntPoint(i);
+      el.CalcDShape(ip, dshape);
+      el.CalcShape(ip, shape);
+
+      Tr.SetIntPoint(&ip);
+      CalcAdjugate(Tr.Jacobian(), invdfdx); // invdfdx = adj(J)
+      w = ip.weight / Tr.Weight();
+
+      dshape.MultTranspose(elfun, vec);
+      invdfdx.MultTranspose(vec, pointflux);
+
+      double a0 = elfun * shape;
+      w *= a0;
+      //cout << "\na0: " << a0;
+
+      pointflux *= w;
+      invdfdx.Mult(pointflux, vec);
+      dshape.AddMult(vec, elvect);
+      //std::cout << "\nelem vector after adding diffusion: "; elvect.Print();
+      //Given u, compute (-f, v), v is shape function or \integration (-f)*shape 
+      double fun_val =  - (*f).Eval(Tr, ip);      
+      w = ip.weight * Tr.Weight();
+      add(elvect, w * fun_val, shape, elvect);
+      //std::cout << "\nelem vector after adding load rhs: "; elvect.Print();
+    }
+  }
+
+  virtual void AssembleElementGrad(const FiniteElement& el,
+    ElementTransformation& Tr,
+    const Vector& elfun,
+    DenseMatrix& elmat) {
+    int dof = el.GetDof();
+    int dim = el.GetDim();
+    dshapedxt.SetSize(dof, dim);
+    dshape.SetSize(dof, dim);
+    shape.SetSize(dof);
+    elmat.SetSize(dof);
+    elmat = 0.0;
+
+    const IntegrationRule* ir = &IntRules.Get(el.GetGeomType(), 2 * el.GetOrder() + Tr.OrderW());
+
+    for (int i = 0; i < ir->GetNPoints(); i++) {
+      const IntegrationPoint& ip = ir->IntPoint(i);
+      el.CalcShape(ip, shape);
+      el.CalcDShape(ip, dshape);
+      Tr.SetIntPoint(&ip);
+
+      // Compute (a0 * grad(du), grad(v)).  Ref: DiffusionIntegrator::AssembleElementMatrix()
+      double w = ip.weight / Tr.Weight();
+      double a0 = elfun * shape;
+      w *= a0;
+      Mult(dshape, Tr.AdjugateJacobian(), dshapedxt); //
+      AddMult_a_AAt(w, dshapedxt, elmat);
+      //cout << "elmat from first integrator: "; elmat.Print();
+      // Compute (da0 u grad(u_o), grad(v)).  Ref: DiffusionIntegrator::AssembleElementMatrix()
+      double da0 = 1; //du/du = 1
+      w = ip.weight / Tr.Weight(); //reset weight
+      w *= da0;
+      dshape.MultTranspose(elfun, vec);
+      invdfdx.MultTranspose(vec, pointflux);
+      pointflux *= w;
+      //invdfdx.Mult(pointflux, vec);
+      //dshape.AddMult(vec, elvect);
+      DenseMatrix first_term(dof, dim), elmat2(dof, dof);
+      MultVWt(shape, pointflux, first_term);
+      AddMultABt(first_term, dshapedxt, elmat);
+      MultABt(first_term, dshapedxt, elmat2);
+      //cout << "elmat from second integrator: "; elmat2.Print();
+      //cout << "total elmat for an element: "; elmat.Print();
+    }
+  }
+};
 
 
 class NLFIntegrator : public NonlinearFormIntegrator
@@ -92,9 +206,7 @@ public:
 
     elvect.SetSize(dof);
     elvect = 0.0;
-
-    std::cout << "u coeff from last iteration: "; elfun.Print();
-
+    
     const IntegrationRule* ir = &IntRules.Get(el.GetGeomType(), 2 * el.GetOrder() + Tr.OrderW());
 
     for (int i = 0; i < ir->GetNPoints(); i++) {
@@ -116,15 +228,14 @@ public:
       pointflux *= w;
       invdfdx.Mult(pointflux, vec);
       dshape.AddMult(vec, elvect);
-      std::cout << "elem vector after adding diffusion: "; elvect.Print();
+      //std::cout << "elem vector after adding diffusion: "; elvect.Print();
       //Given u, compute (u^2-f, v), v is shape function
       //or \integration (u^2-f)*shape 
       //double fun_val = -1; //4 * M_PI * M_PI * (elfun * shape); //the last product computes the current solution
       double fun_val = (elfun * shape) * (elfun * shape) - (*f).Eval(Tr, ip);
       //w = ip.weight / Tr.Weight() * fun_val;
       w = ip.weight * Tr.Weight();
-      add(elvect, w * fun_val, shape, elvect);
-      std::cout << "elem vector after adding load rhs: "; elvect.Print();
+      add(elvect, w * fun_val, shape, elvect);      
     }
   } 
 
@@ -164,28 +275,24 @@ class NLOperator : public Operator
 {
 private:
   NonlinearForm* N;
-  mutable SparseMatrix* Jacobian;
-  Coefficient* f; // f in F(u) = -Laplace u + u^2 - f
+  mutable SparseMatrix* Jacobian;  
 
 public:
-  NLOperator(NonlinearForm* N_, Coefficient* f_, int size) : Operator(size), N(N_), f(f_), Jacobian(NULL) { }
+  NLOperator(NonlinearForm* N_, int size) : Operator(size), N(N_), Jacobian(NULL) { }
 
   virtual void Mult(const Vector& x, Vector& y) const
-  {
-    cout << "\nIn NLOperator (before)";
-    cout << "\nx print: "; x.Print();
-    cout << "\ny print: "; y.Print();
+  {  
     N->Mult(x, y); //Evaluate the action of the NonlinearForm
     //y.Neg();
-    cout << "\nIn NLOperator (after)";
+    /*cout << "\nIn NLOperator (after)";
     cout << "\nx print: "; x.Print();
-    cout << "\ny print: "; y.Print();
+    cout << "\ny print: "; y.Print();*/
   }
 
   virtual Operator& GetGradient(const Vector& x) const
   {
     Jacobian = dynamic_cast<SparseMatrix*>(&N->GetGradient(x));
-    std::cout << "\nJacobian: "; Jacobian->Print();
+    //std::cout << "\nJacobian: "; Jacobian->Print();
     return *Jacobian;
   }
 };
@@ -193,9 +300,9 @@ public:
 
 int main()
 {
-  Mesh mesh(20, 1.0);
-  auto vertices = mesh.GetVertex(1);
-  std::cout << "Vertex 1: " << vertices[0] << ", " << vertices[1] << ", " << vertices[2] << "\n";
+  c = 1;
+  example = 2;
+  Mesh mesh(2, 1.0);
   int dim = mesh.Dimension();
 
   H1_FECollection h1_fec(1, dim);
@@ -214,14 +321,15 @@ int main()
   GridFunction rhs(&h1_space);
   FunctionCoefficient f_exact_coeff(f_exact_);
   //rhs.ProjectCoefficient(f_exact_coeff);
- 
-  ConstantCoefficient one(1.0);
-  ConstantCoefficient f_coeff(1);
+   
   NonlinearForm N(&h1_space);
-  N.AddDomainIntegrator(new NLFIntegrator(f_exact_coeff));
+  if(example == 1)
+    N.AddDomainIntegrator(new NLFIntegrator(f_exact_coeff));
+  else if (example == 2)
+    N.AddDomainIntegrator(new NLFIntegrator_Coeff(f_exact_coeff));
   N.SetEssentialTrueDofs(ess_tdof_list);
   // N.SetEssentialBC(ess_tdof_list, rhs);
-  NLOperator N_oper(&N, &f_coeff, size);
+  NLOperator N_oper(&N, size);
 
   Solver* J_solver;
   Solver* J_prec = new DSmoother(1);
@@ -233,15 +341,22 @@ int main()
   J_solver = J_minres;
 
   NewtonSolver newton_solver;
-  newton_solver.SetRelTol(1e-12);
-  newton_solver.SetAbsTol(1e-12);
+  newton_solver.SetRelTol(1e-5);
+  newton_solver.SetAbsTol(1e-5);
   newton_solver.SetMaxIter(200);
   newton_solver.SetSolver(*J_solver);
   newton_solver.SetOperator(N_oper);
   newton_solver.SetPrintLevel(1);
-  newton_solver.iterative_mode = false;
-
+  newton_solver.iterative_mode = true;
+    
   GridFunction uh(&h1_space);
+
+  //for non-zero initial value (still must satisfy essential boundary condition)
+  ConstantCoefficient const_coeff(0.01);
+  uh.ProjectCoefficient(const_coeff);
+  for(auto & e_i : ess_tdof_list)
+    uh[e_i] = 0.0;
+
   Vector zero(size);
   zero = 0.0;
   newton_solver.Mult(zero, uh); //solve the non-linear form with right hand side as zero
