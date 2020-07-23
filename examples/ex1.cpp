@@ -98,6 +98,7 @@ public:
     int dim = el.GetDim();
     shape.SetSize(dof);
     dshape.SetSize(dof, dim);
+    dshapedxt.SetSize(dof, dim);
     invdfdx.SetSize(dim);
     vec.SetSize(dim);
     pointflux.SetSize(dim);
