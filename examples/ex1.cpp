@@ -126,6 +126,7 @@ public:
       w *= a0;      
 
       pointflux *= w;      
+      Mult(dshape, Tr.AdjugateJacobian(), dshapedxt); //
       dshapedxt.AddMult(pointflux, elvect);
       //std::cout << "\nelem vector after adding diffusion: "; elvect.Print();
       //Given u, compute (-f, v), v is shape function or \integration (-f)*shape 
