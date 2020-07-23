@@ -58,6 +58,8 @@ int example;
 // u = sin( c *  pi * x)
 double u_exact_(const Vector& x)
 {
+  if (example == 3)
+    return x[0] *(1 - x[0]);
   MFEM_ASSERT(x.Size() == 1, "Must be 1D mesh");
   return sin(c * M_PI * x[0]);
 }
@@ -68,9 +70,11 @@ double f_exact_(const Vector& x)
   if (example == 1)// -Laplace u + u^2 = f, deduced from analytic solution u_exact
     return c * c * M_PI * M_PI * sin(c * M_PI * x[0]) + sin(c * M_PI * x[0]) * sin(c * M_PI * x[0]);
   else if (example == 2)// -div(u du) = f, deduced from analytic solution u_exact
-    return c * c * M_PI * M_PI 
-    * ( sin(c * M_PI * x[0]) * sin(c * M_PI * x[0]) 
+    return c * c * M_PI * M_PI
+    * (sin(c * M_PI * x[0]) * sin(c * M_PI * x[0])
       - cos(c * M_PI * x[0]) * cos(c * M_PI * x[0]));
+  else if (example == 3)
+    return -1 * (6 * x[0] * x[0] - 6*x[0] + 1);
   else
     MFEM_ABORT("Wrong example");
 }
@@ -158,26 +162,19 @@ public:
       w *= a0;
       Mult(dshape, Tr.AdjugateJacobian(), dshapedxt); //
       AddMult_a_AAt(w, dshapedxt, elmat);
-      //cout << "elmat from first integrator: "; elmat.Print();
+
       // Compute (da0 u grad(u_o), grad(v)).  Ref: DiffusionIntegrator::AssembleElementMatrix()
       double da0 = 1; //d/du(u) = 1
       w = ip.weight / (Tr.Weight()); //reset weight
       w *= da0;
       dshape.MultTranspose(elfun, vec);
       invdfdx.MultTranspose(vec, pointflux);
-      pointflux *= w;
-      //invdfdx.Mult(pointflux, vec);
-      //dshape.AddMult(vec, elvect);
-      /*DenseMatrix first_term(dof, dim), elmat2(dof, dof);
-      MultVWt(shape, pointflux, first_term);
-      AddMultABt(first_term, dshapedxt, elmat);*/
-
-      DenseMatrix first_term(dim, dof), elmat2(dof, dof);
+      pointflux *= w;     
+            
+      DenseMatrix first_term(dim, dof);      
       MultVWt(pointflux, shape, first_term);
       AddMult(dshapedxt, first_term, elmat);
-      //MultABt(first_term, dshapedxt, elmat2);
-      //cout << "elmat from second integrator: "; elmat2.Print();
-      //cout << "total elmat for an element: "; elmat.Print();
+      //note for above opeation: doing the transverse seems correct from the forumuylation, but didn't work. So, MultVWt(shape, pointflux, first_term); and AddMult(first_term, dshapedxt, elmat) didn't work for example 2, worked for example 3, but took a lot more iterations
     }
   }
 };
@@ -302,7 +299,7 @@ public:
 int main()
 {
   c = 2;
-  example = 2;
+  example = 3;
   Mesh mesh(20, 1.0);
   int dim = mesh.Dimension();
 
@@ -326,10 +323,10 @@ int main()
   NonlinearForm N(&h1_space);
   if(example == 1)
     N.AddDomainIntegrator(new NLFIntegrator(f_exact_coeff));
-  else if (example == 2)
+  else if (example == 2 || example == 3)
     N.AddDomainIntegrator(new NLFIntegrator_Coeff(f_exact_coeff));
-  N.SetEssentialTrueDofs(ess_tdof_list);
-  // N.SetEssentialBC(ess_tdof_list, rhs);
+  N.SetEssentialTrueDofs(ess_tdof_list);  
+  //N.SetEssentialBC(ess_tdof_list, rhs);
   NLOperator N_oper(&N, size);
 
   Solver* J_solver;
