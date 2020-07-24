@@ -44,24 +44,45 @@
 using namespace std;
 using namespace mfem;
 
-/*
+/*example 1
  * Solve Nonlinear Problem: -Laplace u + u^2 - f = 0
- * Exact solution u_exact = sin(2*pi*x)
+ * Exact solution u_exact = sin(c*pi*x)
  *
  * Newton Linearization: Given u, solve du
  *-Laplace du + 2u*du = - F(u), where F(u) = -Laplace u + u^2 - f
  * */
 
+/*example 2
+* Solve Nonlinear Problem: -grad(u grad(u)) - f = 0
+* Exact solution u_exact = sin(c*pi*x)
+* */
+
+/*example 3
+* Solve Nonlinear Problem: -grad(u grad(u)) - f = 0
+* Exact solution u_exact = x(1-x)
+*/
+
+/*example 4 (Thermal problem)
+* Solve Nonlinear Problem: -grad(u grad(u)) - f = 0
+* One end at 0K, Another end has flux of 1 unit applied
+* Exact solution u_exact = unkown
+*/
 
 int c;
 int example;
 // u = sin( c *  pi * x)
 double u_exact_(const Vector& x)
 {
-  if (example == 3)
-    return x[0] *(1 - x[0]);
   MFEM_ASSERT(x.Size() == 1, "Must be 1D mesh");
-  return sin(c * M_PI * x[0]);
+
+  if (example == 3)
+    return x[0] * (1 - x[0]);
+
+  else if (example == 4)
+    return sqrt(2 * x[0]);
+
+  else 
+    return sin(c * M_PI * x[0]);
 }
 
 
@@ -74,9 +95,9 @@ double f_exact_(const Vector& x)
     * (sin(c * M_PI * x[0]) * sin(c * M_PI * x[0])
       - cos(c * M_PI * x[0]) * cos(c * M_PI * x[0]));
   else if (example == 3)
-    return -1 * (6 * x[0] * x[0] - 6*x[0] + 1);
+    return -1 * (6 * x[0] * x[0] - 6 * x[0] + 1);
   else
-    MFEM_ABORT("Wrong example");
+    return 0;
 }
 
 
@@ -129,7 +150,9 @@ public:
       pointflux *= w;      
       Mult(dshape, Tr.AdjugateJacobian(), dshapedxt); //
       dshapedxt.AddMult(pointflux, elvect);
-      //std::cout << "\nelem vector after adding diffusion: "; elvect.Print();
+     /* std::cout << "\ndshape: "; dshape.Print();
+      std::cout << "\ndshapedxt: "; dshapedxt.Print();
+      std::cout << "\nelem vector after adding diffusion: "; elvect.Print();*/
       //Given u, compute (-f, v), v is shape function or \integration (-f)*shape 
       double fun_val =  - (*f).Eval(Tr, ip);      
       w = ip.weight * Tr.Weight();
@@ -301,8 +324,8 @@ public:
 int main()
 {
   c = 2;
-  example = 3;
-  Mesh mesh(20, 1.0);
+  example = 4;
+  Mesh mesh(40, 1.0);
   int dim = mesh.Dimension();
 
   H1_FECollection h1_fec(1, dim);
@@ -317,18 +340,24 @@ int main()
     cout << "\nessential dofs: ";
     ess_tdof_list.Print();
   }
-
-  GridFunction rhs(&h1_space);
+    
   FunctionCoefficient f_exact_coeff(f_exact_);
-  //rhs.ProjectCoefficient(f_exact_coeff);
-   
+     
   NonlinearForm N(&h1_space);
   if(example == 1)
     N.AddDomainIntegrator(new NLFIntegrator(f_exact_coeff));
-  else if (example == 2 || example == 3)
+  else
     N.AddDomainIntegrator(new NLFIntegrator_Coeff(f_exact_coeff));
-  N.SetEssentialTrueDofs(ess_tdof_list);  
-  //N.SetEssentialBC(ess_tdof_list, rhs);
+
+  if (example == 4) {
+    //only one end is fixed
+    Array<int> ess_tdof_list_4;
+    ess_tdof_list_4.Append(ess_tdof_list[0]);
+    N.SetEssentialTrueDofs(ess_tdof_list_4);
+  }
+  else
+    N.SetEssentialTrueDofs(ess_tdof_list);
+  
   NLOperator N_oper(&N, size);
 
   Solver* J_solver;
@@ -343,7 +372,7 @@ int main()
   NewtonSolver newton_solver;
   newton_solver.SetRelTol(1e-10);
   newton_solver.SetAbsTol(1e-10);
-  newton_solver.SetMaxIter(400);
+  newton_solver.SetMaxIter(200);
   newton_solver.SetSolver(*J_solver);
   newton_solver.SetOperator(N_oper);
   newton_solver.SetPrintLevel(1);
@@ -357,9 +386,12 @@ int main()
   for(auto & e_i : ess_tdof_list)
     uh[e_i] = 0.0;
 
-  Vector zero(size);
-  zero = 0.0;
-  newton_solver.Mult(zero, uh); //solve the non-linear form with right hand side as zero
+  Vector rhs(size);
+  rhs = 0.0;
+  if (example == 4)//right hand has flux specified
+    rhs[ess_tdof_list[1]] = 1.0;
+
+  newton_solver.Mult(rhs, uh); //solve the non-linear form with right hand side as rhs and uh has the initial guess (and will eventually store the result)
 
   FunctionCoefficient u_exact_coeff(u_exact_);
   //uh.ProjectCoefficient(u_exact_coeff);
