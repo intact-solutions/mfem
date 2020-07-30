@@ -213,9 +213,8 @@ private:
   Vector shape;
   DenseMatrix dshape, dshapedxt, invdfdx;
   Vector vec, pointflux;
-  Coefficient* f;
 public:
-  NLFIntegrator_Thermal(Coefficient& Q_) :f(&Q_) {}
+  NLFIntegrator_Thermal() {}
   virtual void AssembleElementVector(const FiniteElement& el,
     ElementTransformation& Tr,
     const Vector& elfun,
@@ -256,15 +255,7 @@ public:
 
       pointflux *= w;
       Mult(dshape, Tr.AdjugateJacobian(), dshapedxt); //
-      dshapedxt.AddMult(pointflux, elvect);
-      /* std::cout << "\ndshape: "; dshape.Print();
-       std::cout << "\ndshapedxt: "; dshapedxt.Print();
-       std::cout << "\nelem vector after adding diffusion: "; elvect.Print();*/
-       //Given u, compute (-f, v), v is shape function or \integration (-f)*shape 
-      double fun_val = -(*f).Eval(Tr, ip);
-      w = ip.weight * Tr.Weight();
-      add(elvect, w * fun_val, shape, elvect);
-      //std::cout << "\nelem vector after adding load rhs: "; elvect.Print();
+      dshapedxt.AddMult(pointflux, elvect);      
     }
   }
 
@@ -556,10 +547,8 @@ int main(int argc, char* argv[])
     ess_tdof_list.Print();
   }
 
-  ConstantCoefficient f_exact_coeff(0.0);
-
   NonlinearForm N(&h1_space); 
-  N.AddDomainIntegrator(new NLFIntegrator_Coeff(f_exact_coeff));
+  N.AddDomainIntegrator(new NLFIntegrator_Thermal());
 
   ////only one end is fixed
   //Array<int> ess_tdof_list_4;
