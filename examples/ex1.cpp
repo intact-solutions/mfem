@@ -71,6 +71,8 @@ using namespace mfem;
 //non-linear 3D thermal problem test
 double alpha = 1.0e-1;
 double kappa = 0.3;
+double alpha_bc = 0.0e-1;
+double kappa_bc = 28.0;
 int c;
 int example;
 // u = sin( c *  pi * x)
@@ -303,6 +305,80 @@ public:
   }
 };
 
+class NLFIntegrator_ThermalBC : public NonlinearFormIntegrator
+{
+private:
+  Vector shape;
+  DenseMatrix dshape, dshapedxt, invdfdx;
+  Vector vec, pointflux;
+  Coefficient* f;
+public:
+  NLFIntegrator_ThermalBC(Coefficient& Q_) :f(&Q_) {}
+  virtual void AssembleFaceVector(const FiniteElement& el, const FiniteElement& el2,
+    FaceElementTransformations& Tr,
+    const Vector& elfun,
+    Vector& elvect)
+  {
+    int dof = el.GetDof();
+    int dim = el.GetDim();
+    shape.SetSize(dof);
+    dshape.SetSize(dof, dim);
+    invdfdx.SetSize(dim);
+    vec.SetSize(dim);
+    pointflux.SetSize(dim);
+    double w;
+
+    elvect.SetSize(dof);
+    elvect = 0.0;
+
+    const IntegrationRule* ir = &IntRules.Get(Tr.FaceGeom, 0);
+
+    for (int i = 0; i < ir->GetNPoints(); i++) {
+      const IntegrationPoint& ip = ir->IntPoint(i);     
+      IntegrationPoint eip;
+      Tr.Loc1.Transform(ip, eip);
+      el.CalcShape(eip, shape);
+
+      Tr.Face->SetIntPoint(&ip);
+
+      double dof_active = f->Eval(*Tr.Face, ip);
+      double fun_val = -(kappa_bc + alpha_bc * (elfun * shape)) * dof_active;
+
+      w = ip.weight * Tr.Face->Weight();
+      add(elvect, w * fun_val, shape, elvect);
+    }
+    std::cout << "el vec: "; elvect.Print();
+  }
+
+  virtual void AssembleFaceGrad(const FiniteElement& el, const FiniteElement& el2,
+    FaceElementTransformations& Tr,
+    const Vector& elfun,
+    DenseMatrix& elmat) {
+    int dof = el.GetDof();
+    int dim = el.GetDim();
+    dshapedxt.SetSize(dof, dim);
+    dshape.SetSize(dof, dim);
+    shape.SetSize(dof);
+    elmat.SetSize(dof);
+    elmat = 0.0;
+
+    const IntegrationRule* ir = &IntRules.Get(Tr.FaceGeom, 0);
+
+    for (int i = 0; i < ir->GetNPoints(); i++) {
+      const IntegrationPoint& ip = ir->IntPoint(i);
+      IntegrationPoint eip;
+      Tr.Loc1.Transform(ip, eip);
+      el.CalcShape(eip, shape);
+
+      Tr.Face->SetIntPoint(&ip);
+ 
+      double dof_active = f->Eval(*Tr.Face, ip);
+      double fun_val = -alpha_bc * ip.weight * Tr.Face->Weight() * dof_active;
+      AddMult_a_VVt(fun_val, shape, elmat);
+    }
+  }
+};
+
 class NLFIntegrator : public NonlinearFormIntegrator
 {
 private:
@@ -508,7 +584,9 @@ int main1()
   return 0;
 }
 
-int main(int argc, char* argv[])
+
+//nonlinear thermal
+int main_nlthermal(int argc, char* argv[])
 {
   // 1. Parse command-line options.
   const char* mesh_file = "../data/beam-tet.mesh";
@@ -607,6 +685,106 @@ int main(int argc, char* argv[])
   return 0;
 
   
+}
+
+
+//nonlinear thermal bounary condition
+int main(int argc, char* argv[])
+{
+  // 1. Parse command-line options.
+  const char* mesh_file = "../data/beam-tet.mesh";
+  int ref_levels = 0;
+  int order = 1;
+
+  int precision = 8;
+  cout.precision(precision);
+
+  // 2. Read the mesh from the given mesh file. We can handle triangular,
+  //    quadrilateral, tetrahedral and hexahedral meshes with the same code.
+  //Mesh mesh(mesh_file, 1, 1);
+  Mesh mesh(20, 25.0);
+  int dim = mesh.Dimension();
+
+  //Refine the mesh to increase the resolution.In this example we do
+  //    'ref_levels' of uniform refinement, where 'ref_levels' is a
+  //    command-line parameter.
+  for (int lev = 0; lev < ref_levels; lev++)
+  {
+    mesh.UniformRefinement();
+  }
+
+  H1_FECollection h1_fec(order, dim);
+  FiniteElementSpace h1_space(&mesh, &h1_fec);
+  int fe_size = h1_space.GetTrueVSize();
+  cout << "Number of temperature unknowns: " << fe_size << endl;
+
+  Array<int> ess_tdof_list;
+  if (mesh.bdr_attributes.Size()) {
+    Array<int> ess_bdr(mesh.bdr_attributes.Max());
+    ess_bdr = 0;
+    ess_bdr[0] = 1;
+    h1_space.GetEssentialTrueDofs(ess_bdr, ess_tdof_list);
+    cout << "\nessential dofs: ";
+    ess_tdof_list.Print();
+  }
+
+  NonlinearForm N(&h1_space);
+  N.AddDomainIntegrator(new NLFIntegrator_Thermal());  
+
+  //right hand side
+  Vector surface_flux(mesh.bdr_attributes.Max());
+  surface_flux = 0.0;
+  surface_flux(1) = 1.0;
+  PWConstCoefficient flux_coeff(surface_flux);
+  N.AddBdrFaceIntegrator(new NLFIntegrator_ThermalBC(flux_coeff));
+
+  ////only one end is fixed
+  //Array<int> ess_tdof_list_4;
+  //ess_tdof_list_4.Append(ess_tdof_list[0]);
+  N.SetEssentialTrueDofs(ess_tdof_list);
+
+  NLOperator N_oper(&N, fe_size);
+
+  Solver* J_solver;
+  Solver* J_prec = new DSmoother(1);
+  MINRESSolver* J_minres = new MINRESSolver;
+  J_minres->SetRelTol(1e-12);
+  J_minres->SetAbsTol(1e-12);
+  J_minres->SetMaxIter(200);
+  J_minres->SetPreconditioner(*J_prec);
+  J_solver = J_minres;
+
+  NewtonSolver newton_solver;
+  newton_solver.SetRelTol(1e-10);
+  newton_solver.SetAbsTol(1e-10);
+  newton_solver.SetMaxIter(200);
+  newton_solver.SetSolver(*J_solver);
+  newton_solver.SetOperator(N_oper);
+  newton_solver.SetPrintLevel(1);
+  newton_solver.iterative_mode = true;
+
+  GridFunction uh(&h1_space);
+
+  //for non-zero initial value (still must satisfy essential boundary condition)
+  ConstantCoefficient const_coeff(1.0);
+  uh.ProjectCoefficient(const_coeff);
+  for (auto& e_i : ess_tdof_list)
+    uh[e_i] = 0.0;
+
+  Vector rhs;
+  rhs = 0.0;
+
+  newton_solver.Mult(rhs, uh); //solve the non-linear form with right hand side as rhs and uh has the initial guess (and will eventually store the result)
+
+  // 13. Save the refined mesh and the solution. This output can be viewed later
+   //     using GLVis: "glvis -m refined.mesh -g sol.gf".
+  ofstream mesh_ofs("D:\\OneDrive\\Documents\\VisualStudio2017\\Projects\\mfem\\examples\\solution_nonlinear_bc_thermal.vtk");
+  mesh.PrintVTK(mesh_ofs, 1, 0);
+  uh.SaveVTK(mesh_ofs, "u", 1);
+
+  return 0;
+
+
 }
 
 // Description:  This example code demonstrates the use of MFEM to define a
