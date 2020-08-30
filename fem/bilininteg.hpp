@@ -16,6 +16,8 @@
 #include "nonlininteg.hpp"
 #include "fespace.hpp"
 #include "libceed/ceed.hpp"
+#include <iostream>
+#include <fstream>
 
 namespace mfem
 {
@@ -2543,6 +2545,8 @@ class ElasticityIntegrator : public BilinearFormIntegrator
 protected:
    double q_lambda, q_mu;
    Coefficient *lambda, *mu;
+  std::ofstream output;
+  std::ofstream debug;
 
 private:
 #ifndef MFEM_THREAD_SAFE
@@ -2553,7 +2557,15 @@ private:
 
 public:
    ElasticityIntegrator(Coefficient &l, Coefficient &m)
-   { lambda = &l; mu = &m; }
+  { lambda = &l;
+    mu = &m;
+    output = std::ofstream("/app/test/old_bi.txt");
+    output << "Old (MFEM)\n";
+    debug = std::ofstream("/app/test_d/old_debug.txt");
+    debug << "old debug\n";
+  }
+
+
    /** With this constructor lambda = q_l * m and mu = q_m * m;
        if dim * q_l + 2 * q_m = 0 then trace(sigma) = 0. */
    ElasticityIntegrator(Coefficient &m, double q_l, double q_m)

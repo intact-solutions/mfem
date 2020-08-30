@@ -11,6 +11,7 @@
 
 // Implementation of Bilinear Form Integrators
 
+
 #include "fem.hpp"
 #include <cmath>
 #include <algorithm>
@@ -2277,10 +2278,15 @@ void VectorDiffusionIntegrator::AssembleElementVector(
 void ElasticityIntegrator::AssembleElementMatrix(
    const FiniteElement &el, ElementTransformation &Trans, DenseMatrix &elmat)
 {
+
+  if (Trans.ElementNo > 1) {
+    output.close();
+    debug.close();
+  }
    int dof = el.GetDof();
    int dim = el.GetDim();
    double w, L, M;
-
+ 
    MFEM_ASSERT(dim == Trans.GetSpaceDim(), "");
 
 #ifdef MFEM_THREAD_SAFE
@@ -2302,13 +2308,22 @@ void ElasticityIntegrator::AssembleElementMatrix(
       ir = &IntRules.Get(el.GetGeomType(), order);
    }
 
+   bool check = ir == NULL;
+   output << "Element: " << Trans.ElementNo << " null rule? " << check << " IR size: " << ir->GetNPoints() << "\n";
    elmat = 0.0;
 
    for (int i = 0; i < ir -> GetNPoints(); i++)
    {
       const IntegrationPoint &ip = ir->IntPoint(i);
+      mfem::DenseMatrix local_elmat(dof * dim, dof * dim);
+      local_elmat = 0.0;
 
+      // dshape is 8 (rows) by 3 (cols)
       el.CalcDShape(ip, dshape);
+      output << "qp: " << i << " dshape height: " << dshape.Height() << " dhsape width: " << dshape.Width() << "\n";
+      for (int b = 0; b < 8; b++) {
+        output << dshape(b, 0) << ", " << dshape(b, 1) << ", " << dshape(b, 2) << "\n";
+      }
 
       Trans.SetIntPoint(&ip);
       w = ip.weight * Trans.Weight();
@@ -2339,7 +2354,11 @@ void ElasticityIntegrator::AssembleElementMatrix(
             for (int k = 0; k < dof; k++)
                for (int l = 0; l < dof; l++)
                {
-                  elmat (dof*d+k, dof*d+l) += (M * w) * pelmat(k, l);
+                 double value = (M * w) * pelmat(k, l);
+                  debug << "e: " << Trans.ElementNo << " i: " << k << " j: " << l
+                       << " d_i: " << d << " d_j: " << d << " value: " << value
+                       << "\n";
+                  local_elmat (dof*d+k, dof*d+l) += value;
                }
          }
          for (int i = 0; i < dim; i++)
@@ -2348,11 +2367,28 @@ void ElasticityIntegrator::AssembleElementMatrix(
                for (int k = 0; k < dof; k++)
                   for (int l = 0; l < dof; l++)
                   {
-                     elmat(dof*i+k, dof*j+l) +=
-                        (M * w) * gshape(k, j) * gshape(l, i);
+                    double value =
+                      (M * w) * gshape(k, j) * gshape(l, i);
+                    debug << "e: " << Trans.ElementNo << " i: " << k << " j: " << l
+                          << " d_i: " << i << " d_j: " << j << " value: " << value
+                          << "\n";
+                     local_elmat(dof*i+k, dof*j+l) +=
+                       value;
                   }
             }
       }
+      output << "local_elmat, width(): " << local_elmat.Width() << " hieght: " << local_elmat.Height() << "\n";
+      for (int c = 0; c < local_elmat.Height(); c++) {
+        for (int r = 0; r < local_elmat.Width(); r++) {
+          output << elmat(r, c);
+          if (r != local_elmat.Width() - 1) {
+              output << ", ";
+            }
+        }
+        output << "\n";
+      }
+
+      elmat += local_elmat;
    }
 }
 
