@@ -2556,15 +2556,7 @@ private:
 #endif
 
 public:
-   ElasticityIntegrator(Coefficient &l, Coefficient &m)
-  { lambda = &l;
-    mu = &m;
-    output = std::ofstream("/app/test/old_bi.txt");
-    output << "Old (MFEM)\n";
-    debug = std::ofstream("/app/test_d/old_debug.txt");
-    debug << "old debug\n";
-  }
-
+  ElasticityIntegrator(Coefficient &l, Coefficient &m);
 
    /** With this constructor lambda = q_l * m and mu = q_m * m;
        if dim * q_l + 2 * q_m = 0 then trace(sigma) = 0. */

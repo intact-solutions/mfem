@@ -2274,6 +2274,15 @@ void VectorDiffusionIntegrator::AssembleElementVector(
    }
 }
 
+ElasticityIntegrator::ElasticityIntegrator(Coefficient &l, Coefficient &m)
+{ lambda = &l;
+  mu = &m;
+  output = std::ofstream("/app/test/old_bi.txt");
+  //output << "Old (MFEM B)\n";
+  debug = std::ofstream("/app/test_d/old_debug.txt");
+  //debug << "old debug\n";
+  std::cout << "**** WHAT 4 **** " << std::endl;
+}
 
 void ElasticityIntegrator::AssembleElementMatrix(
    const FiniteElement &el, ElementTransformation &Trans, DenseMatrix &elmat)
@@ -2286,7 +2295,6 @@ void ElasticityIntegrator::AssembleElementMatrix(
    int dof = el.GetDof();
    int dim = el.GetDim();
    double w, L, M;
- 
    MFEM_ASSERT(dim == Trans.GetSpaceDim(), "");
 
 #ifdef MFEM_THREAD_SAFE
