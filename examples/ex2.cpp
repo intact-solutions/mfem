@@ -44,6 +44,28 @@
 using namespace std;
 using namespace mfem;
 
+class NLOperator : public Operator
+{
+private:
+  NonlinearForm* N;
+  mutable SparseMatrix* Jacobian;
+
+public:
+  NLOperator(NonlinearForm* N_, int size) : Operator(size), N(N_), Jacobian(NULL) { }
+
+  virtual void Mult(const Vector& x, Vector& y) const
+  {
+    N->Mult(x, y); //Evaluate the action of the NonlinearForm
+  }
+
+  virtual Operator& GetGradient(const Vector& x) const
+  {
+    Jacobian = dynamic_cast<SparseMatrix*>(&N->GetGradient(x));
+    return *Jacobian;
+  }
+};
+
+
 int main(int argc, char *argv[])
 {
    // 1. Parse command-line options.
@@ -120,6 +142,8 @@ int main(int argc, char *argv[])
       fec = new H1_FECollection(order, dim);
       fespace = new FiniteElementSpace(mesh, fec, dim);
    }
+
+   int fe_size = fespace->GetTrueVSize();
    cout << "Number of finite element unknowns: " << fespace->GetTrueVSize()
         << endl << "Assembling: " << flush;
 
@@ -169,79 +193,51 @@ int main(int argc, char *argv[])
    ConstantCoefficient lambda(1);
    ConstantCoefficient mu(1);
 
-   BilinearForm *a = new BilinearForm(fespace);
-   a->AddDomainIntegrator(new ElasticityIntegrator(lambda,mu));
+   NonlinearForm a(fespace);
+   HyperelasticModel* model = new NeoHookeanModel(mu, lambda);
+   a.AddDomainIntegrator(new HyperelasticNLFIntegrator(model));
+   a.SetEssentialTrueDofs(ess_tdof_list);
 
-   // 10. Assemble the bilinear form and the corresponding linear system,
-   //     applying any necessary transformations such as: eliminating boundary
-   //     conditions, applying conforming constraints for non-conforming AMR,
-   //     static condensation, etc.
-   cout << "matrix ... " << flush;
-   if (static_cond) { a->EnableStaticCondensation(); }
-   a->Assemble();
+   NLOperator N_oper(&a, fe_size);
 
-   SparseMatrix A;
-   Vector B, X;
-   a->FormLinearSystem(ess_tdof_list, x, *b, A, X, B);
-   cout << "done." << endl;
+   Solver* J_solver;
+   Solver* J_prec = new DSmoother(1);
+   MINRESSolver* J_minres = new MINRESSolver;
+   J_minres->SetRelTol(1e-12);
+   J_minres->SetAbsTol(1e-12);
+   J_minres->SetMaxIter(200);
+   J_minres->SetPreconditioner(*J_prec);
+   J_solver = J_minres;
 
-   cout << "Size of linear system: " << A.Height() << endl;
+   NewtonSolver newton_solver;
+   newton_solver.SetRelTol(1e-10);
+   newton_solver.SetAbsTol(1e-10);
+   newton_solver.SetMaxIter(200);
+   newton_solver.SetSolver(*J_solver);
+   newton_solver.SetOperator(N_oper);
+   newton_solver.SetPrintLevel(1);
+   newton_solver.iterative_mode = true;
 
-#ifndef MFEM_USE_SUITESPARSE
-   // 11. Define a simple symmetric Gauss-Seidel preconditioner and use it to
-   //     solve the system Ax=b with PCG.
-   GSSmoother M(A);
-   PCG(A, M, B, X, 1, 500, 1e-8, 0.0);
-#else
-   // 11. If MFEM was compiled with SuiteSparse, use UMFPACK to solve the system.
-   UMFPackSolver umf_solver;
-   umf_solver.Control[UMFPACK_ORDERING] = UMFPACK_ORDERING_METIS;
-   umf_solver.SetOperator(A);
-   umf_solver.Mult(B, X);
-#endif
+   GridFunction uh(fespace);
 
-   // 12. Recover the solution as a finite element grid function.
-   a->RecoverFEMSolution(X, *b, x);
+   //for non-zero initial value (still must satisfy essential boundary condition)
+   ConstantCoefficient const_coeff(1.0);
+   uh.ProjectCoefficient(const_coeff);
+   for (auto& e_i : ess_tdof_list)
+     uh[e_i] = 0.0;
 
-   // 13. For non-NURBS meshes, make the mesh curved based on the finite element
-   //     space. This means that we define the mesh elements through a fespace
-   //     based transformation of the reference element. This allows us to save
-   //     the displaced mesh as a curved mesh when using high-order finite
-   //     element displacement field. We assume that the initial mesh (read from
-   //     the file) is not higher order curved mesh compared to the chosen FE
-   //     space.
-   if (!mesh->NURBSext)
-   {
-      mesh->SetNodalFESpace(fespace);
-   }
+   //Vector rhs;
+   //rhs = 0.0;
 
-   // 14. Save the displaced mesh and the inverted solution (which gives the
-   //     backward displacements to the original grid). This output can be
-   //     viewed later using GLVis: "glvis -m displaced.mesh -g sol.gf".
-   {
-      /*GridFunction *nodes = mesh->GetNodes();
-      *nodes += x;
-      x *= -1;*/
-      
-      ofstream sol_ofs("D:\\OneDrive\\Documents\\VisualStudio2017\\Projects\\mfem\\examples\\hyperelastic_sol.vtk");      
-      sol_ofs.precision(8);
-      mesh->PrintVTK(sol_ofs, 1);
-      x.SaveVTK(sol_ofs, "displacement", 1);
-   }
+   newton_solver.Mult(*b, uh); //solve the non-linear form with right hand side as rhs and uh has the initial guess (and will eventually store the result)
 
-   // 15. Send the above data by socket to a GLVis server. Use the "n" and "b"
-   //     keys in GLVis to visualize the displacements.
-   if (visualization)
-   {
-      char vishost[] = "localhost";
-      int  visport   = 19916;
-      socketstream sol_sock(vishost, visport);
-      sol_sock.precision(8);
-      sol_sock << "solution\n" << *mesh << x << flush;
-   }
+   // 13. Save the refined mesh and the solution. This output can be viewed later
+    //     using GLVis: "glvis -m refined.mesh -g sol.gf".
+   ofstream mesh_ofs("D:\\OneDrive\\Documents\\VisualStudio2017\\Projects\\mfem\\examples\\hyperelastic_sol.vtk");
+   mesh->PrintVTK(mesh_ofs, 1, 0);
+   uh.SaveVTK(mesh_ofs, "u", 1);
 
-   // 16. Free the used memory.
-   delete a;
+   return 0;
    delete b;
    if (fec)
    {
@@ -329,6 +325,7 @@ int main_main(int argc, char* argv[])
     fec = new H1_FECollection(order, dim);
     fespace = new FiniteElementSpace(mesh, fec, dim);
   }
+
   cout << "Number of finite element unknowns: " << fespace->GetTrueVSize()
     << endl << "Assembling: " << flush;
 
