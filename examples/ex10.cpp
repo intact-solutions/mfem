@@ -157,10 +157,10 @@ void visualize(ostream &out, Mesh *mesh, GridFunction *deformed_nodes,
 int main(int argc, char *argv[])
 {
    // 1. Parse command-line options.
-   const char *mesh_file = "../data/beam-quad.mesh";
-   int ref_levels = 2;
+   const char *mesh_file = "../data/beam-hex.mesh";
+   int ref_levels = 1;
    int order = 2;
-   int ode_solver_type = 3;
+   int ode_solver_type = 2;
    double t_final = 300.0;
    double dt = 3.0;
    double visc = 1e-2;
@@ -353,17 +353,16 @@ int main(int argc, char *argv[])
       GridFunction *nodes = &x;
       int owns_nodes = 0;
       mesh->SwapNodes(nodes, owns_nodes);
-      ofstream mesh_ofs("deformed.mesh");
+      ofstream mesh_ofs("D:\\OneDrive\\Documents\\VisualStudio2017\\Projects\\mfem\\examples\\hyperelastic_deformed.vtk");
       mesh_ofs.precision(8);
-      mesh->Print(mesh_ofs);
+      mesh->PrintVTK(mesh_ofs, 1);
       mesh->SwapNodes(nodes, owns_nodes);
-      ofstream velo_ofs("velocity.sol");
-      velo_ofs.precision(8);
-      v.Save(velo_ofs);
-      ofstream ee_ofs("elastic_energy.sol");
-      ee_ofs.precision(8);
+      ofstream hyperelastic_solution("D:\\OneDrive\\Documents\\VisualStudio2017\\Projects\\mfem\\examples\\hyperelastic_sol.vtk");
+      hyperelastic_solution.precision(8);
+      mesh->PrintVTK(hyperelastic_solution, 1);
+      v.SaveVTK(hyperelastic_solution, "velocity", 1);
       oper.GetElasticEnergyDensity(x, w);
-      w.Save(ee_ofs);
+      w.SaveVTK(hyperelastic_solution, "energy", 1);
    }
 
    // 10. Free the used memory.
