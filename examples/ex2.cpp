@@ -286,16 +286,17 @@ int main(int argc, char* argv[])
 
   // 2. Read the mesh from the given mesh file. We can handle triangular,
   //    quadrilateral, tetrahedral or hexahedral elements with the same code.
-  Mesh* mesh = new Mesh(mesh_file, 1, 1);
+  //Mesh* mesh = new Mesh(mesh_file, 1, 1);
+  Mesh* mesh = new Mesh(20, 10.0);
   int dim = mesh->Dimension();
 
-  if (mesh->attributes.Max() < 2 || mesh->bdr_attributes.Max() < 2)
+  /*if (mesh->attributes.Max() < 2 || mesh->bdr_attributes.Max() < 2)
   {
     cerr << "\nInput mesh should have at least two materials and "
       << "two boundary attributes! (See schematic in ex2.cpp)\n"
       << endl;
     return 3;
-  }
+  }*/
 
   // 3. Select the order of the finite element discretization space. For NURBS
   //    meshes, we increase the order by degree elevation.
@@ -346,7 +347,7 @@ int main(int argc, char* argv[])
   ess_bdr = 0;
   ess_bdr[0] = 1;
   fespace->GetEssentialTrueDofs(ess_bdr, ess_tdof_list);
-
+  //cout << "\nEssential dofs: "; ess_tdof_list.Print();
   // 7. Set up the linear form b(.) which corresponds to the right-hand side of
   //    the FEM linear system. In this case, b_i equals the boundary integral
   //    of f*phi_i where f represents a "pull down" force on the Neumann part
@@ -363,7 +364,7 @@ int main(int argc, char* argv[])
   {
     Vector pull_force(mesh->bdr_attributes.Max());
     pull_force = 0.0;
-    pull_force(1) = -1.0e-2;
+    pull_force(1) = 3.0e-2;
     f.Set(dim - 1, new PWConstCoefficient(pull_force));
   }
 
@@ -371,7 +372,7 @@ int main(int argc, char* argv[])
   b->AddBoundaryIntegrator(new VectorBoundaryLFIntegrator(f));
   cout << "r.h.s. ... " << flush;
   b->Assemble();
-
+  //cout << "rhs: "; b->Print();
   // 8. Define the solution vector x as a finite element grid function
   //    corresponding to fespace. Initialize x with initial guess of zero,
   //    which satisfies the boundary conditions.
@@ -384,11 +385,11 @@ int main(int argc, char* argv[])
   Vector lambda(mesh->attributes.Max());
   lambda = 1.0;
   lambda(0) = lambda(1) * 50;
-  PWConstCoefficient lambda_func(lambda);
+  ConstantCoefficient lambda_func(1.0);
   Vector mu(mesh->attributes.Max());
   mu = 1.0;
   mu(0) = mu(1) * 50;
-  PWConstCoefficient mu_func(mu);
+  ConstantCoefficient mu_func(1.0);
 
   BilinearForm* a = new BilinearForm(fespace);
   a->AddDomainIntegrator(new ElasticityIntegrator(lambda_func, mu_func));
@@ -406,7 +407,8 @@ int main(int argc, char* argv[])
   a->FormLinearSystem(ess_tdof_list, x, *b, A, X, B);
   cout << "done." << endl;
 
-  cout << "Size of linear system: " << A.Height() << endl;
+  cout << "Size of linear system: " << A.Height() << endl;  
+  //cout << "\nLHS: "; A.Print();
 
 #ifndef MFEM_USE_SUITESPARSE
   // 11. Define a simple symmetric Gauss-Seidel preconditioner and use it to
