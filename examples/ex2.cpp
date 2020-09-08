@@ -66,9 +66,9 @@ public:
 };
 
 void InitialDeformation(const Vector& x, Vector& y);
-
-int main2(int argc, char *argv[])
-{
+GridFunction elasticity_main(Mesh* mesh);
+int main(int argc, char *argv[])
+{  
    // 1. Parse command-line options.
    const char *mesh_file = "../data/beam-hex.mesh";
    int order = 1;
@@ -95,7 +95,10 @@ int main2(int argc, char *argv[])
 
    // 2. Read the mesh from the given mesh file. We can handle triangular,
    //    quadrilateral, tetrahedral or hexahedral elements with the same code.
-   Mesh *mesh = new Mesh(mesh_file, 1, 1);
+   //Mesh *mesh = new Mesh(mesh_file, 1, 1);
+   Mesh* mesh = new Mesh(20, 10.0);
+   auto initial_solution = elasticity_main(mesh);   
+   initial_solution.Print();
    int dim = mesh->Dimension();
 
    if (mesh->attributes.Max() < 2 || mesh->bdr_attributes.Max() < 2)
@@ -258,7 +261,7 @@ void InitialDeformation(const Vector& x, Vector& y)
 }
 
 
-int main(int argc, char* argv[])
+GridFunction elasticity_main(Mesh* mesh)
 {
   // 1. Parse command-line options.
   const char* mesh_file = "../data/beam-quad.mesh";
@@ -266,28 +269,10 @@ int main(int argc, char* argv[])
   bool static_cond = false;
   bool visualization = 1;
 
-  OptionsParser args(argc, argv);
-  args.AddOption(&mesh_file, "-m", "--mesh",
-    "Mesh file to use.");
-  args.AddOption(&order, "-o", "--order",
-    "Finite element order (polynomial degree).");
-  args.AddOption(&static_cond, "-sc", "--static-condensation", "-no-sc",
-    "--no-static-condensation", "Enable static condensation.");
-  args.AddOption(&visualization, "-vis", "--visualization", "-no-vis",
-    "--no-visualization",
-    "Enable or disable GLVis visualization.");
-  args.Parse();
-  if (!args.Good())
-  {
-    args.PrintUsage(cout);
-    return 1;
-  }
-  args.PrintOptions(cout);
-
   // 2. Read the mesh from the given mesh file. We can handle triangular,
   //    quadrilateral, tetrahedral or hexahedral elements with the same code.
   //Mesh* mesh = new Mesh(mesh_file, 1, 1);
-  Mesh* mesh = new Mesh(20, 10.0);
+  //Mesh* mesh = new Mesh(20, 10.0);
   int dim = mesh->Dimension();
 
   /*if (mesh->attributes.Max() < 2 || mesh->bdr_attributes.Max() < 2)
@@ -479,6 +464,6 @@ int main(int argc, char* argv[])
   }
   delete mesh;
 
-  return 0;
+  return x;
 }
 
