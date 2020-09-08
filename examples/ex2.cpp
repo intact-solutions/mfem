@@ -65,11 +65,12 @@ public:
   }
 };
 
+void InitialDeformation(const Vector& x, Vector& y);
 
-int main(int argc, char *argv[])
+int main2(int argc, char *argv[])
 {
    // 1. Parse command-line options.
-   const char *mesh_file = "../data/beam-tri.mesh";
+   const char *mesh_file = "../data/beam-hex.mesh";
    int order = 1;
    bool static_cond = false;
    bool visualization = 0;
@@ -117,8 +118,8 @@ int main(int argc, char *argv[])
    //    largest number that gives a final mesh with no more than 5,000
    //    elements.
    {
-      int ref_levels =
-         (int)floor(log(5000./mesh->GetNE())/log(2.)/dim);
+     int ref_levels = 0;
+         //(int)floor(log(5000./mesh->GetNE())/log(2.)/dim);
       for (int l = 0; l < ref_levels; l++)
       {
          mesh->UniformRefinement();
@@ -144,7 +145,7 @@ int main(int argc, char *argv[])
    }
 
    int fe_size = fespace->GetTrueVSize();
-   cout << "Number of finite element unknowns: " << fespace->GetTrueVSize()
+   cout << "Number of finite element unknowns: " << fe_size
         << endl << "Assembling: " << flush;
 
    // 6. Determine the list of true (i.e. conforming) essential boundary dofs.
@@ -181,20 +182,14 @@ int main(int argc, char *argv[])
    cout << "r.h.s. ... " << flush;
    b->Assemble();
 
-   // 8. Define the solution vector x as a finite element grid function
-   //    corresponding to fespace. Initialize x with initial guess of zero,
-   //    which satisfies the boundary conditions.
-   GridFunction x(fespace);
-   x = 0.0;
-
    // 9. Set up the bilinear form a(.,.) on the finite element space
    //    corresponding to the linear elasticity integrator with piece-wise
    //    constants coefficient lambda and mu.   
-   ConstantCoefficient lambda(1);
-   ConstantCoefficient mu(1);
-
+   //ConstantCoefficient lambda(1);
+   //ConstantCoefficient mu(1);
+   double mu = 5, K = 3.0e+6;
    NonlinearForm a(fespace);
-   HyperelasticModel* model = new NeoHookeanModel(mu, lambda);
+   HyperelasticModel* model = new NeoHookeanModel(mu, K);
    a.AddDomainIntegrator(new HyperelasticNLFIntegrator(model));
    a.SetEssentialTrueDofs(ess_tdof_list);
 
@@ -219,16 +214,21 @@ int main(int argc, char *argv[])
    newton_solver.iterative_mode = true;
 
    GridFunction uh(fespace);
+   VectorFunctionCoefficient deform(dim, InitialDeformation);
+   uh.ProjectCoefficient(deform);
+   //for non-zero initial value (still must satisfy essential boundary condition) 
+  /* for (int i = 0; i < fe_size; i++)
+     uh[i] = 0.0;*/
 
-   //for non-zero initial value (still must satisfy essential boundary condition)
-   ConstantCoefficient const_coeff(1.0);
-   uh.ProjectCoefficient(const_coeff);
    for (auto& e_i : ess_tdof_list)
      uh[e_i] = 0.0;
 
+   std::cout << "\nInitial Guess:";
+   uh.Print();
    //Vector rhs;
    //rhs = 0.0;
-
+   std::cout << "\nRHS:";
+   b->Print();
    newton_solver.Mult(*b, uh); //solve the non-linear form with right hand side as rhs and uh has the initial guess (and will eventually store the result)
 
    // 13. Save the refined mesh and the solution. This output can be viewed later
@@ -249,10 +249,19 @@ int main(int argc, char *argv[])
    return 0;
 }
 
-int main_main(int argc, char* argv[])
+void InitialDeformation(const Vector& x, Vector& y)
+{
+  // Set the initial configuration. Having this different from the reference
+  // configuration can help convergence
+  y = x;
+  y[2] = x[2] + 0.25 * x[2];
+}
+
+
+int main(int argc, char* argv[])
 {
   // 1. Parse command-line options.
-  const char* mesh_file = "../data/beam-tri.mesh";
+  const char* mesh_file = "../data/beam-quad.mesh";
   int order = 1;
   bool static_cond = false;
   bool visualization = 1;
@@ -300,8 +309,8 @@ int main_main(int argc, char* argv[])
   //    largest number that gives a final mesh with no more than 5,000
   //    elements.
   {
-    int ref_levels =
-      (int)floor(log(5000. / mesh->GetNE()) / log(2.) / dim);
+    int ref_levels = 0;
+      //(int)floor(log(5000. / mesh->GetNE()) / log(2.) / dim);
     for (int l = 0; l < ref_levels; l++)
     {
       mesh->UniformRefinement();
@@ -431,15 +440,20 @@ int main_main(int argc, char* argv[])
   //     backward displacements to the original grid). This output can be
   //     viewed later using GLVis: "glvis -m displaced.mesh -g sol.gf".
   {
-    GridFunction* nodes = mesh->GetNodes();
+    /*GridFunction* nodes = mesh->GetNodes();
     *nodes += x;
-    x *= -1;
-    ofstream mesh_ofs("displaced.mesh");
+    x *= -1;*/
+    /*ofstream mesh_ofs("displaced.mesh");
     mesh_ofs.precision(8);
     mesh->Print(mesh_ofs);
     ofstream sol_ofs("sol.gf");
     sol_ofs.precision(8);
-    x.Save(sol_ofs);
+    x.Save(sol_ofs);*/
+
+    ofstream mesh_ofs("D:\\OneDrive\\Documents\\VisualStudio2017\\Projects\\mfem\\examples\\elastic_sol.vtk");
+    mesh_ofs.precision(8);
+    mesh->PrintVTK(mesh_ofs, 1, 0);
+    x.SaveVTK(mesh_ofs, "u", 1);
   }
 
   // 15. Send the above data by socket to a GLVis server. Use the "n" and "b"
