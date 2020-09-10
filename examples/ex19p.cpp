@@ -322,16 +322,16 @@ int main(int argc, char *argv[])
 
    // 18. Save the displaced mesh, the final deformation, and the pressure
    {
-      GridFunction *nodes = &x_gf;
+      /*GridFunction *nodes = &x_gf;
       int owns_nodes = 0;
       pmesh->SwapNodes(nodes, owns_nodes);
 
       ostringstream mesh_name, pressure_name, deformation_name;
       mesh_name << "mesh." << setfill('0') << setw(6) << myid;
       pressure_name << "pressure." << setfill('0') << setw(6) << myid;
-      deformation_name << "deformation." << setfill('0') << setw(6) << myid;
+      deformation_name << "deformation." << setfill('0') << setw(6) << myid;*/
 
-      ofstream mesh_ofs(mesh_name.str().c_str());
+      /*ofstream mesh_ofs(mesh_name.str().c_str());
       mesh_ofs.precision(8);
       pmesh->Print(mesh_ofs);
 
@@ -341,7 +341,13 @@ int main(int argc, char *argv[])
 
       ofstream deformation_ofs(deformation_name.str().c_str());
       deformation_ofs.precision(8);
-      x_def.Save(deformation_ofs);
+      x_def.Save(deformation_ofs);*/
+
+      ofstream hyperelastic_solution("D:\\OneDrive\\Documents\\VisualStudio2017\\Projects\\mfem\\examples\\hyperelastic_sol.vtk");
+      hyperelastic_solution.precision(8);
+      pmesh->PrintVTK(hyperelastic_solution, 1);
+      p_gf.SaveVTK(hyperelastic_solution, "Pressure", 1);      
+      x_def.SaveVTK(hyperelastic_solution, "displacement", 1);
    }
 
    // 19. Free the used memory
