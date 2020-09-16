@@ -44,29 +44,93 @@
 using namespace std;
 using namespace mfem;
 
-class NLOperator : public Operator
-{
+/** Incremental hyperelastic integrator for any given HyperelasticModel.
+
+    Represents @f$ \int W(Jpt) dx @f$ over a target zone, where W is the
+    @a model's strain energy density function, and Jpt is the Jacobian of the
+    target->physical coordinates transformation. The target configuration is
+    given by the current mesh at the time of the evaluation of the integrator.
+*/
+class IncrementalHyperelasticIntegrator : public mfem::NonlinearFormIntegrator {
 private:
-  NonlinearForm* N;
-  mutable SparseMatrix* Jacobian;
+  mfem::HyperelasticModel* model;
+
+  //   Jrt: the Jacobian of the target-to-reference-element transformation.
+  //   Jpr: the Jacobian of the reference-to-physical-element transformation.
+  //   Jpt: the Jacobian of the target-to-physical-element transformation.
+  //     P: represents dW_d(Jtp) (dim x dim).
+  //   DSh: gradients of reference shape functions (dof x dim).
+  //    DS: gradients of the shape functions in the target (stress-free)
+  //        configuration (dof x dim).
+  // PMatI: coordinates of the deformed configuration (dof x dim).
+  // PMatO: reshaped view into the local element contribution to the operator
+  //        output - the result of AssembleElementVector() (dof x dim).
+  mfem::DenseMatrix DSh, DS, Jrt, Jpr, Jpt, P, PMatI, PMatO;
 
 public:
-  NLOperator(NonlinearForm* N_, int size) : Operator(size), N(N_), Jacobian(NULL) { }
+  /** @param[in] m  HyperelasticModel that will be integrated. */
+  IncrementalHyperelasticIntegrator(mfem::HyperelasticModel* m) : model(m) {}
 
-  virtual void Mult(const Vector& x, Vector& y) const
-  {
-    N->Mult(x, y); //Evaluate the action of the NonlinearForm
-  }
+  /** @brief Computes the integral of W(Jacobian(Trt)) over a target zone
+      @param[in] el     Type of FiniteElement.
+      @param[in] Ttr    Represents ref->target coordinates transformation.
+      @param[in] elfun  Physical coordinates of the zone. */
+  virtual double GetElementEnergy(const mfem::FiniteElement& el, mfem::ElementTransformation& Ttr,
+    const mfem::Vector& elfun);
 
-  virtual Operator& GetGradient(const Vector& x) const
-  {
-    Jacobian = dynamic_cast<SparseMatrix*>(&N->GetGradient(x));
-    return *Jacobian;
-  }
+  virtual void AssembleElementVector(const mfem::FiniteElement& el, mfem::ElementTransformation& Ttr,
+    const mfem::Vector& elfun, mfem::Vector& elvect);
+
+  virtual void AssembleElementGrad(const mfem::FiniteElement& el, mfem::ElementTransformation& Ttr,
+    const mfem::Vector& elfun, mfem::DenseMatrix& elmat);
+};
+
+class HyperelasticTractionIntegrator : public mfem::NonlinearFormIntegrator {
+private:
+  mfem::VectorCoefficient& function;
+  mutable mfem::DenseMatrix DSh_u, DS_u, J0i, F, Finv, FinvT, PMatI_u;
+  mutable mfem::Vector      shape, nor, fnor, Sh_p, Sh_u;
+
+public:
+  HyperelasticTractionIntegrator(mfem::VectorCoefficient& f) : function(f) {}
+
+  virtual void AssembleFaceVector(const mfem::FiniteElement& el1, const mfem::FiniteElement& el2,
+    mfem::FaceElementTransformations& Tr, const mfem::Vector& elfun, mfem::Vector& elvec);
+
+  virtual void AssembleFaceGrad(const mfem::FiniteElement& el1, const mfem::FiniteElement& el2,
+    mfem::FaceElementTransformations& Tr, const mfem::Vector& elfun,
+    mfem::DenseMatrix& elmat);
+
+  virtual ~HyperelasticTractionIntegrator() {}
+};
+
+
+
+/// The abstract MFEM operator for a quasi-static solve
+class NonlinearSolidQuasiStaticOperator : public mfem::Operator {
+protected:
+  /// The nonlinear form
+  std::shared_ptr<mfem::NonlinearForm> m_H_form;
+
+  /// The linearized jacobian at the current state
+  mutable std::unique_ptr<mfem::Operator> m_Jacobian;
+
+public:
+  /// The constructor
+  NonlinearSolidQuasiStaticOperator(std::shared_ptr<mfem::NonlinearForm> H_form);
+
+  /// Required to use the native newton solver
+  mfem::Operator& GetGradient(const mfem::Vector& x) const;
+
+  /// Required for residual calculations
+  void Mult(const mfem::Vector& k, mfem::Vector& y) const;
+
+  /// The destructor
+  virtual ~NonlinearSolidQuasiStaticOperator();
 };
 
 void InitialDeformation(const Vector& x, Vector& y);
-GridFunction elasticity_main(Mesh* mesh);
+GridFunction elasticity_main(Mesh* mesh, double lambda, double mu, double force);
 int main(int argc, char *argv[])
 {  
    // 1. Parse command-line options.
@@ -95,19 +159,20 @@ int main(int argc, char *argv[])
 
    // 2. Read the mesh from the given mesh file. We can handle triangular,
    //    quadrilateral, tetrahedral or hexahedral elements with the same code.
-   //Mesh *mesh = new Mesh(mesh_file, 1, 1);
-   Mesh* mesh = new Mesh(20, 10.0);
-   auto initial_solution = elasticity_main(mesh);   
-   initial_solution.Print();
+   Mesh* mesh = new Mesh(mesh_file, 1, 1);   
+   Mesh* mesh2 = new Mesh(mesh_file, 1, 1);
+   //Mesh* mesh = new Mesh(20, 10.0);
+   //Mesh* mesh2 = new Mesh(20, 10.0); 
+  
    int dim = mesh->Dimension();
 
-   if (mesh->attributes.Max() < 2 || mesh->bdr_attributes.Max() < 2)
-   {
-      cerr << "\nInput mesh should have at least two materials and "
-           << "two boundary attributes! (See schematic in ex2.cpp)\n"
-           << endl;
-      return 3;
-   }
+   //if (mesh->attributes.Max() < 2 || mesh->bdr_attributes.Max() < 2)
+   //{
+   //   cerr << "\nInput mesh should have at least two materials and "
+   //        << "two boundary attributes! (See schematic in ex2.cpp)\n"
+   //        << endl;
+   //   return 3;
+   //}
 
    // 3. Select the order of the finite element discretization space. For NURBS
    //    meshes, we increase the order by degree elevation.
@@ -121,13 +186,14 @@ int main(int argc, char *argv[])
    //    largest number that gives a final mesh with no more than 5,000
    //    elements.
    {
-     int ref_levels = 0;
+     int ref_levels = 1;
          //(int)floor(log(5000./mesh->GetNE())/log(2.)/dim);
       for (int l = 0; l < ref_levels; l++)
       {
          mesh->UniformRefinement();
+         mesh2->UniformRefinement();
       }
-   }
+   }  
 
    // 5. Define a finite element space on the mesh. Here we use vector finite
    //    elements, i.e. dim copies of a scalar finite element space. The vector
@@ -159,80 +225,76 @@ int main(int argc, char *argv[])
    ess_bdr = 0;
    ess_bdr[0] = 1;
    fespace->GetEssentialTrueDofs(ess_bdr, ess_tdof_list);
-
-   // 7. Set up the linear form b(.) which corresponds to the right-hand side of
-   //    the FEM linear system. In this case, b_i equals the boundary integral
-   //    of f*phi_i where f represents a "pull down" force on the Neumann part
-   //    of the boundary and phi_i are the basis functions in the finite element
-   //    fespace. The force is defined by the VectorArrayCoefficient object f,
-   //    which is a vector of Coefficient objects. The fact that f is non-zero
-   //    on boundary attribute 2 is indicated by the use of piece-wise constants
-   //    coefficient for its last component.
-   VectorArrayCoefficient f(dim);
-   for (int i = 0; i < dim-1; i++)
-   {
-      f.Set(i, new ConstantCoefficient(0.0));
-   }
-   {
-      Vector pull_force(mesh->bdr_attributes.Max());
-      pull_force = 0.0;
-      pull_force(1) = -1.0e-2;
-      f.Set(dim-1, new PWConstCoefficient(pull_force));
-   }
-
-   LinearForm *b = new LinearForm(fespace);
-   b->AddBoundaryIntegrator(new VectorBoundaryLFIntegrator(f));
-   cout << "r.h.s. ... " << flush;
-   b->Assemble();
+   cout << "\nessential dofs: ";
+   //ess_tdof_list.Print();
+     
 
    // 9. Set up the bilinear form a(.,.) on the finite element space
    //    corresponding to the linear elasticity integrator with piece-wise
    //    constants coefficient lambda and mu.   
    //ConstantCoefficient lambda(1);
    //ConstantCoefficient mu(1);
-   double mu = 5, K = 3.0e+6;
-   NonlinearForm a(fespace);
+   double mu = 0.25, K = 15.0;  
+   //double mu = 1.0, K = 1.67;
+   
+   auto nl_form = std::make_shared<mfem::NonlinearForm>(fespace);
    HyperelasticModel* model = new NeoHookeanModel(mu, K);
-   a.AddDomainIntegrator(new HyperelasticNLFIntegrator(model));
-   a.SetEssentialTrueDofs(ess_tdof_list);
+   nl_form->AddDomainIntegrator(new IncrementalHyperelasticIntegrator(model));
+   nl_form->SetEssentialTrueDofs(ess_tdof_list);
 
-   NLOperator N_oper(&a, fe_size);
+   // define the traction vector
+   Array<int> trac_bdr(mesh->bdr_attributes.Max());
+   trac_bdr = 0;
+   trac_bdr[1] = 1;
+
+   mfem::Vector traction(dim);
+   traction           = 0.0;
+   traction(1)        = 25.4e-4; //91e-4 with no refinement
+   mfem::VectorConstantCoefficient traction_coeff(traction);
+   nl_form->AddBdrFaceIntegrator(new HyperelasticTractionIntegrator(traction_coeff), trac_bdr);
+
+   NonlinearSolidQuasiStaticOperator N_oper(nl_form);
 
    Solver* J_solver;
    Solver* J_prec = new DSmoother(1);
    MINRESSolver* J_minres = new MINRESSolver;
-   J_minres->SetRelTol(1e-12);
-   J_minres->SetAbsTol(1e-12);
-   J_minres->SetMaxIter(200);
+   J_minres->SetRelTol(1e-6);
+   J_minres->SetAbsTol(1e-8);
+   J_minres->SetMaxIter(2000);
    J_minres->SetPreconditioner(*J_prec);
    J_solver = J_minres;
 
    NewtonSolver newton_solver;
-   newton_solver.SetRelTol(1e-10);
-   newton_solver.SetAbsTol(1e-10);
-   newton_solver.SetMaxIter(200);
+   newton_solver.SetRelTol(1e-4);
+   newton_solver.SetAbsTol(1e-6);
+   newton_solver.SetMaxIter(2000);
    newton_solver.SetSolver(*J_solver);
    newton_solver.SetOperator(N_oper);
    newton_solver.SetPrintLevel(1);
    newton_solver.iterative_mode = true;
 
+   double v = (3 * K - 2 * mu) / (6 * K + 2 * mu);
+   double lambda = mu * 2 * v / (1 - 2 * v);
+   auto initial_solution = elasticity_main(mesh2, lambda, mu, 1e-3);
+   initial_solution.Print();
+
    GridFunction uh(fespace);
-   VectorFunctionCoefficient deform(dim, InitialDeformation);
-   uh.ProjectCoefficient(deform);
-   //for non-zero initial value (still must satisfy essential boundary condition) 
-  /* for (int i = 0; i < fe_size; i++)
-     uh[i] = 0.0;*/
+   //VectorFunctionCoefficient deform(dim, InitialDeformation);
+   //uh.ProjectCoefficient(deform);
+   for (int i = 0; i < uh.Size(); i++) {
+     uh[i] = initial_solution[i];
+     //uh[i] = 0.0;
+   }
+   //for non-zero initial value (still must satisfy essential boundary condition)    
 
    for (auto& e_i : ess_tdof_list)
      uh[e_i] = 0.0;
 
-   std::cout << "\nInitial Guess:";
-   uh.Print();
-   //Vector rhs;
-   //rhs = 0.0;
-   std::cout << "\nRHS:";
-   b->Print();
-   newton_solver.Mult(*b, uh); //solve the non-linear form with right hand side as rhs and uh has the initial guess (and will eventually store the result)
+   //std::cout << "\nInitial Guess:";
+   //uh.Print();
+   Vector rhs;
+   rhs = 0.0;   
+   newton_solver.Mult(rhs, uh); //solve the non-linear form with right hand side as rhs and uh has the initial guess (and will eventually store the result)
 
    // 13. Save the refined mesh and the solution. This output can be viewed later
     //     using GLVis: "glvis -m refined.mesh -g sol.gf".
@@ -241,7 +303,6 @@ int main(int argc, char *argv[])
    uh.SaveVTK(mesh_ofs, "u", 1);
 
    return 0;
-   delete b;
    if (fec)
    {
       delete fespace;
@@ -261,7 +322,7 @@ void InitialDeformation(const Vector& x, Vector& y)
 }
 
 
-GridFunction elasticity_main(Mesh* mesh)
+GridFunction elasticity_main(Mesh* mesh, double lambda, double mu, double force)
 {
   // 1. Parse command-line options.
   const char* mesh_file = "../data/beam-quad.mesh";
@@ -349,8 +410,8 @@ GridFunction elasticity_main(Mesh* mesh)
   {
     Vector pull_force(mesh->bdr_attributes.Max());
     pull_force = 0.0;
-    pull_force(1) = 3.0e-2;
-    f.Set(dim - 1, new PWConstCoefficient(pull_force));
+    pull_force(1) = force;
+    f.Set(1, new PWConstCoefficient(pull_force));
   }
 
   LinearForm* b = new LinearForm(fespace);
@@ -367,14 +428,9 @@ GridFunction elasticity_main(Mesh* mesh)
   // 9. Set up the bilinear form a(.,.) on the finite element space
   //    corresponding to the linear elasticity integrator with piece-wise
   //    constants coefficient lambda and mu.
-  Vector lambda(mesh->attributes.Max());
-  lambda = 1.0;
-  lambda(0) = lambda(1) * 50;
-  ConstantCoefficient lambda_func(1.0);
-  Vector mu(mesh->attributes.Max());
-  mu = 1.0;
-  mu(0) = mu(1) * 50;
-  ConstantCoefficient mu_func(1.0);
+  
+  ConstantCoefficient lambda_func(lambda);
+  ConstantCoefficient mu_func(mu);
 
   BilinearForm* a = new BilinearForm(fespace);
   a->AddDomainIntegrator(new ElasticityIntegrator(lambda_func, mu_func));
@@ -467,3 +523,253 @@ GridFunction elasticity_main(Mesh* mesh)
   return x;
 }
 
+double IncrementalHyperelasticIntegrator::GetElementEnergy(const mfem::FiniteElement& el,
+  mfem::ElementTransformation& Ttr, const mfem::Vector& elfun)
+{
+  int    dof = el.GetDof(), dim = el.GetDim();
+  double energy;
+
+  DSh.SetSize(dof, dim);
+  Jrt.SetSize(dim);
+  Jpr.SetSize(dim);
+  Jpt.SetSize(dim);
+  PMatI.UseExternalData(elfun.GetData(), dof, dim);
+
+  const mfem::IntegrationRule* ir = IntRule;
+  if (!ir) {
+    ir = &(mfem::IntRules.Get(el.GetGeomType(), 2 * el.GetOrder() + 3));  // <---
+  }
+
+  energy = 0.0;
+  model->SetTransformation(Ttr);
+  for (int i = 0; i < ir->GetNPoints(); i++) {
+    const mfem::IntegrationPoint& ip = ir->IntPoint(i);
+    Ttr.SetIntPoint(&ip);
+    CalcInverse(Ttr.Jacobian(), Jrt);
+
+    el.CalcDShape(ip, DSh);
+    MultAtB(PMatI, DSh, Jpr);
+    Mult(Jpr, Jrt, Jpt);
+
+    for (int d = 0; d < dim; d++) {
+      Jpt(d, d) += 1.0;
+    }
+
+    energy += ip.weight * Ttr.Weight() * model->EvalW(Jpt);
+  }
+
+  return energy;
+}
+
+void IncrementalHyperelasticIntegrator::AssembleElementVector(const mfem::FiniteElement& el,
+  mfem::ElementTransformation& Ttr,
+  const mfem::Vector& elfun, mfem::Vector& elvect)
+{
+  int dof = el.GetDof(), dim = el.GetDim();
+
+  DSh.SetSize(dof, dim);
+  DS.SetSize(dof, dim);
+  Jrt.SetSize(dim);
+  Jpt.SetSize(dim);
+  P.SetSize(dim);
+  PMatI.UseExternalData(elfun.GetData(), dof, dim);
+  elvect.SetSize(dof * dim);
+  PMatO.UseExternalData(elvect.GetData(), dof, dim);
+
+  const mfem::IntegrationRule* ir = IntRule;
+  if (!ir) {
+    ir = &(mfem::IntRules.Get(el.GetGeomType(), 2 * el.GetOrder() + 3));  // <---
+  }
+
+  elvect = 0.0;
+  model->SetTransformation(Ttr);
+  
+  for (int i = 0; i < ir->GetNPoints(); i++) {
+    const mfem::IntegrationPoint& ip = ir->IntPoint(i);
+    Ttr.SetIntPoint(&ip);
+    CalcInverse(Ttr.Jacobian(), Jrt);
+
+    el.CalcDShape(ip, DSh);
+    Mult(DSh, Jrt, DS);
+    MultAtB(PMatI, DS, Jpt);
+
+    for (int d = 0; d < dim; d++) {
+      Jpt(d, d) += 1.0;
+    }
+
+    auto det = Jpt.Det();
+    //std::cout << " " << det;
+    if (det < 0 ) {
+      std::cout << "\nsomething wong;";
+      std::cout << "\nTtr Jac: ";  Ttr.Jacobian().Print();
+      std::cout << "\nJrt: ";  Jrt.Print();
+      std::cout << "\nDSh: ";  DSh.Print();
+      std::cout << "\nDS: ";  DS.Print();
+      std::cout << "\nPMatI: ";  PMatI.Print();
+      std::cout << "\nJpt: "; Jpt.Print();
+    }    
+    //Jpt.Print();
+    model->EvalP(Jpt, P);
+
+    P *= ip.weight * Ttr.Weight();
+    
+    AddMultABt(DS, P, PMatO);
+  }
+}
+
+void IncrementalHyperelasticIntegrator::AssembleElementGrad(const mfem::FiniteElement& el,
+  mfem::ElementTransformation& Ttr, const mfem::Vector& elfun,
+  mfem::DenseMatrix& elmat)
+{
+  int dof = el.GetDof(), dim = el.GetDim();
+
+  DSh.SetSize(dof, dim);
+  DS.SetSize(dof, dim);
+  Jrt.SetSize(dim);
+  Jpt.SetSize(dim);
+  PMatI.UseExternalData(elfun.GetData(), dof, dim);
+  elmat.SetSize(dof * dim);
+
+  const mfem::IntegrationRule* ir = IntRule;
+  if (!ir) {
+    ir = &(mfem::IntRules.Get(el.GetGeomType(), 2 * el.GetOrder() + 3));  // <---
+  }
+
+  elmat = 0.0;
+  model->SetTransformation(Ttr);
+  for (int i = 0; i < ir->GetNPoints(); i++) {
+    const mfem::IntegrationPoint& ip = ir->IntPoint(i);
+    Ttr.SetIntPoint(&ip);
+    CalcInverse(Ttr.Jacobian(), Jrt);
+
+    el.CalcDShape(ip, DSh);
+    Mult(DSh, Jrt, DS);
+    MultAtB(PMatI, DS, Jpt);
+
+    for (int d = 0; d < dim; d++) {
+      Jpt(d, d) += 1.0;
+    }
+
+    model->AssembleH(Jpt, DS, ip.weight * Ttr.Weight(), elmat);
+  }
+}
+
+
+NonlinearSolidQuasiStaticOperator::NonlinearSolidQuasiStaticOperator(std::shared_ptr<mfem::NonlinearForm> H_form)
+  : mfem::Operator(H_form->FESpace()->GetTrueVSize())
+{
+  m_H_form = H_form;
+}
+
+// compute: y = H(x,p)
+void NonlinearSolidQuasiStaticOperator::Mult(const mfem::Vector& k, mfem::Vector& y) const
+{
+  // Apply the nonlinear form
+  m_H_form->Mult(k, y);
+}
+
+// Compute the Jacobian from the nonlinear form
+mfem::Operator& NonlinearSolidQuasiStaticOperator::GetGradient(const mfem::Vector& x) const
+{
+  return m_H_form->GetGradient(x);
+}
+
+// destructor
+NonlinearSolidQuasiStaticOperator::~NonlinearSolidQuasiStaticOperator() {}
+
+
+void HyperelasticTractionIntegrator::AssembleFaceVector(const mfem::FiniteElement& el1,
+  const mfem::FiniteElement& el2,
+  mfem::FaceElementTransformations& Tr, const mfem::Vector& elfun,
+  mfem::Vector& elvec)
+{
+  int dim = el1.GetDim();
+  int dof = el1.GetDof();
+
+  shape.SetSize(dof);
+  elvec.SetSize(dim * dof);
+
+  DSh_u.SetSize(dof, dim);
+  DS_u.SetSize(dof, dim);
+  J0i.SetSize(dim);
+  F.SetSize(dim);
+  Finv.SetSize(dim);
+
+  PMatI_u.UseExternalData(elfun.GetData(), dof, dim);
+
+  int                          intorder = 2 * el1.GetOrder() + 3;
+  const mfem::IntegrationRule& ir = mfem::IntRules.Get(Tr.FaceGeom, intorder);
+
+  elvec = 0.0;
+
+  mfem::Vector trac(dim);
+  mfem::Vector ftrac(dim);
+  mfem::Vector nor(dim);
+  mfem::Vector fnor(dim);
+  mfem::Vector u(dim);
+  mfem::Vector fu(dim);
+
+  for (int i = 0; i < ir.GetNPoints(); i++) {
+    const mfem::IntegrationPoint& ip = ir.IntPoint(i);
+    mfem::IntegrationPoint        eip;
+    Tr.Loc1.Transform(ip, eip);
+
+    Tr.Face->SetIntPoint(&ip);
+
+    CalcOrtho(Tr.Face->Jacobian(), nor);
+
+    // Normalize vector
+    double norm = nor.Norml2();
+    nor /= norm;
+
+    // Compute traction
+    function.Eval(trac, *Tr.Face, ip);
+
+    Tr.Elem1->SetIntPoint(&eip);
+    CalcInverse(Tr.Elem1->Jacobian(), J0i);
+
+    el1.CalcDShape(eip, DSh_u);
+    Mult(DSh_u, J0i, DS_u);
+    MultAtB(PMatI_u, DS_u, F);
+
+    for (int d = 0; d < dim; d++) {
+      F(d, d) += 1.0;
+    }
+
+    CalcInverse(F, Finv);
+
+    Finv.MultTranspose(nor, fnor);
+
+    el1.CalcShape(eip, shape);
+    for (int j = 0; j < dof; j++) {
+      for (int k = 0; k < dim; k++) {
+        elvec(dof * k + j) -= trac(k) * shape(j) * ip.weight * Tr.Face->Weight() * F.Det() * fnor.Norml2();
+      }
+    }
+  }
+}
+
+void HyperelasticTractionIntegrator::AssembleFaceGrad(const mfem::FiniteElement& el1,
+  const mfem::FiniteElement& el2,
+  mfem::FaceElementTransformations& Tr, const mfem::Vector& elfun,
+  mfem::DenseMatrix& elmat)
+{
+  double       diff_step = 1.0e-8;
+  mfem::Vector temp_out_1;
+  mfem::Vector temp_out_2;
+  mfem::Vector temp(elfun.GetData(), elfun.Size());
+
+  elmat.SetSize(elfun.Size(), elfun.Size());
+
+  for (int j = 0; j < temp.Size(); j++) {
+    temp[j] += diff_step;
+    AssembleFaceVector(el1, el2, Tr, temp, temp_out_1);
+    temp[j] -= 2.0 * diff_step;
+    AssembleFaceVector(el1, el2, Tr, temp, temp_out_2);
+
+    for (int k = 0; k < temp.Size(); k++) {
+      elmat(k, j) = (temp_out_1[k] - temp_out_2[k]) / (2.0 * diff_step);
+    }
+    temp[j] = elfun[j];
+  }
+}
