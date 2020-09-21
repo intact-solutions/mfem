@@ -186,7 +186,7 @@ int main(int argc, char *argv[])
    //    largest number that gives a final mesh with no more than 5,000
    //    elements.
    {
-     int ref_levels = 1;
+     int ref_levels = 2;
          //(int)floor(log(5000./mesh->GetNE())/log(2.)/dim);
       for (int l = 0; l < ref_levels; l++)
       {
@@ -249,7 +249,7 @@ int main(int argc, char *argv[])
 
    mfem::Vector traction(dim);
    traction           = 0.0;
-   traction(1)        = 25.4e-4; //91e-4 with no refinement
+   traction(1)        = 10.0e-4; //91e-4 with no refinement
    mfem::VectorConstantCoefficient traction_coeff(traction);
    nl_form->AddBdrFaceIntegrator(new HyperelasticTractionIntegrator(traction_coeff), trac_bdr);
 
@@ -276,7 +276,7 @@ int main(int argc, char *argv[])
    double v = (3 * K - 2 * mu) / (6 * K + 2 * mu);
    double lambda = mu * 2 * v / (1 - 2 * v);
    auto initial_solution = elasticity_main(mesh2, lambda, mu, 1e-3);
-   initial_solution.Print();
+   //initial_solution.Print();
 
    GridFunction uh(fespace);
    //VectorFunctionCoefficient deform(dim, InitialDeformation);
@@ -600,13 +600,13 @@ void IncrementalHyperelasticIntegrator::AssembleElementVector(const mfem::Finite
     auto det = Jpt.Det();
     //std::cout << " " << det;
     if (det < 0 ) {
-      std::cout << "\nsomething wong;";
-      std::cout << "\nTtr Jac: ";  Ttr.Jacobian().Print();
+      //std::cout << "\n-ve Jac;";
+      /*std::cout << "\nTtr Jac: ";  Ttr.Jacobian().Print();
       std::cout << "\nJrt: ";  Jrt.Print();
       std::cout << "\nDSh: ";  DSh.Print();
       std::cout << "\nDS: ";  DS.Print();
       std::cout << "\nPMatI: ";  PMatI.Print();
-      std::cout << "\nJpt: "; Jpt.Print();
+      std::cout << "\nJpt: "; Jpt.Print();*/
     }    
     //Jpt.Print();
     model->EvalP(Jpt, P);
