@@ -186,7 +186,7 @@ int main(int argc, char *argv[])
    //    largest number that gives a final mesh with no more than 5,000
    //    elements.
    {
-     int ref_levels = 2;
+     int ref_levels = 1;
          //(int)floor(log(5000./mesh->GetNE())/log(2.)/dim);
       for (int l = 0; l < ref_levels; l++)
       {
@@ -227,6 +227,11 @@ int main(int argc, char *argv[])
    fespace->GetEssentialTrueDofs(ess_bdr, ess_tdof_list);
    cout << "\nessential dofs: ";
    //ess_tdof_list.Print();
+
+    // define the traction vector
+   Array<int> trac_bdr(mesh->bdr_attributes.Max());
+   trac_bdr = 0;
+   trac_bdr[1] = 1;
      
 
    // 9. Set up the bilinear form a(.,.) on the finite element space
@@ -234,73 +239,62 @@ int main(int argc, char *argv[])
    //    constants coefficient lambda and mu.   
    //ConstantCoefficient lambda(1);
    //ConstantCoefficient mu(1);
-   double mu = 0.25, K = 15.0;  
+   double mu = 0.25, K = 150.0;  
    //double mu = 1.0, K = 1.67;
-   
-   auto nl_form = std::make_shared<mfem::NonlinearForm>(fespace);
-   HyperelasticModel* model = new NeoHookeanModel(mu, K);
-   nl_form->AddDomainIntegrator(new IncrementalHyperelasticIntegrator(model));
-   nl_form->SetEssentialTrueDofs(ess_tdof_list);
 
-   // define the traction vector
-   Array<int> trac_bdr(mesh->bdr_attributes.Max());
-   trac_bdr = 0;
-   trac_bdr[1] = 1;
-
-   mfem::Vector traction(dim);
-   traction           = 0.0;
-   traction(1)        = 10.0e-4; //91e-4 with no refinement
-   mfem::VectorConstantCoefficient traction_coeff(traction);
-   nl_form->AddBdrFaceIntegrator(new HyperelasticTractionIntegrator(traction_coeff), trac_bdr);
-
-   NonlinearSolidQuasiStaticOperator N_oper(nl_form);
-
-   Solver* J_solver;
-   Solver* J_prec = new DSmoother(1);
-   MINRESSolver* J_minres = new MINRESSolver;
-   J_minres->SetRelTol(1e-6);
-   J_minres->SetAbsTol(1e-8);
-   J_minres->SetMaxIter(2000);
-   J_minres->SetPreconditioner(*J_prec);
-   J_solver = J_minres;
-
-   NewtonSolver newton_solver;
-   newton_solver.SetRelTol(1e-4);
-   newton_solver.SetAbsTol(1e-6);
-   newton_solver.SetMaxIter(2000);
-   newton_solver.SetSolver(*J_solver);
-   newton_solver.SetOperator(N_oper);
-   newton_solver.SetPrintLevel(1);
-   newton_solver.iterative_mode = true;
-
-   double v = (3 * K - 2 * mu) / (6 * K + 2 * mu);
-   double lambda = mu * 2 * v / (1 - 2 * v);
-   auto initial_solution = elasticity_main(mesh2, lambda, mu, 1e-3);
-   //initial_solution.Print();
-
-   GridFunction uh(fespace);
-   //VectorFunctionCoefficient deform(dim, InitialDeformation);
-   //uh.ProjectCoefficient(deform);
-   for (int i = 0; i < uh.Size(); i++) {
-     uh[i] = initial_solution[i];
-     //uh[i] = 0.0;
-   }
-   //for non-zero initial value (still must satisfy essential boundary condition)    
-
-   for (auto& e_i : ess_tdof_list)
-     uh[e_i] = 0.0;
-
-   //std::cout << "\nInitial Guess:";
-   //uh.Print();
    Vector rhs;
-   rhs = 0.0;   
-   newton_solver.Mult(rhs, uh); //solve the non-linear form with right hand side as rhs and uh has the initial guess (and will eventually store the result)
+   rhs = 0.0;
+   
+   GridFunction uh(fespace); //solution
+   uh = 0.0;
 
-   // 13. Save the refined mesh and the solution. This output can be viewed later
-    //     using GLVis: "glvis -m refined.mesh -g sol.gf".
-   ofstream mesh_ofs("D:\\OneDrive\\Documents\\VisualStudio2017\\Projects\\mfem\\examples\\hyperelastic_sol.vtk");
-   mesh->PrintVTK(mesh_ofs, 1, 0);
-   uh.SaveVTK(mesh_ofs, "u", 1);
+   double force_step = 10.0e-4;
+   int num_steps = 50;
+   int sampling_steps = 5;
+   for (int i = 0; i < num_steps; i++) {
+
+     auto nl_form = std::make_shared<mfem::NonlinearForm>(fespace);
+     HyperelasticModel* model = new NeoHookeanModel(mu, K);
+     nl_form->AddDomainIntegrator(new IncrementalHyperelasticIntegrator(model));
+     nl_form->SetEssentialTrueDofs(ess_tdof_list);
+       
+     mfem::Vector traction(dim);
+     traction = 0.0;
+     traction(1) = (i+1) * force_step;
+     mfem::VectorConstantCoefficient traction_coeff(traction);
+     nl_form->AddBdrFaceIntegrator(new HyperelasticTractionIntegrator(traction_coeff), trac_bdr);
+
+     std::cout << "\n\nSolving for force step: " << i << ": " << (i + 1) * force_step << "\n";
+
+     NonlinearSolidQuasiStaticOperator N_oper(nl_form);
+
+     Solver* J_solver;
+     Solver* J_prec = new DSmoother(1);
+     MINRESSolver* J_minres = new MINRESSolver;
+     J_minres->SetRelTol(1e-6);
+     J_minres->SetAbsTol(1e-8);
+     J_minres->SetMaxIter(2000);
+     J_minres->SetPreconditioner(*J_prec);
+     J_solver = J_minres;
+
+     NewtonSolver newton_solver;
+     newton_solver.SetRelTol(1e-4);
+     newton_solver.SetAbsTol(1e-6);
+     newton_solver.SetMaxIter(2000);
+     newton_solver.SetSolver(*J_solver);
+     newton_solver.SetOperator(N_oper);
+     newton_solver.SetPrintLevel(1);
+     newton_solver.iterative_mode = true;
+
+     newton_solver.Mult(rhs, uh); //solve the non-linear form with right hand side as rhs and uh has the initial guess (and will eventually store the result)
+
+     //13. Save the refined mesh and the solution.
+     if (i % sampling_steps == 0) {
+       ofstream mesh_ofs("D:\\OneDrive\\Documents\\VisualStudio2017\\Projects\\mfem\\examples\\hyperelastic_sol_" + std::to_string(i) + ".vtk");
+       mesh->PrintVTK(mesh_ofs, 1, 0);
+       uh.SaveVTK(mesh_ofs, "u", 1);
+     }
+   }  
 
    return 0;
    if (fec)
