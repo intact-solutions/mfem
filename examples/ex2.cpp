@@ -129,6 +129,12 @@ public:
   virtual ~NonlinearSolidQuasiStaticOperator();
 };
 
+//overload newton solver to do line search
+class NewtonSolverLineSearch : public NewtonSolver {
+public:
+  void Mult(const Vector& b, Vector& x) const;
+};
+
 void InitialDeformation(const Vector& x, Vector& y);
 GridFunction elasticity_main(Mesh* mesh, double lambda, double mu, double force);
 int main(int argc, char *argv[])
@@ -186,7 +192,7 @@ int main(int argc, char *argv[])
    //    largest number that gives a final mesh with no more than 5,000
    //    elements.
    {
-     int ref_levels = 1;
+     int ref_levels = 2;
          //(int)floor(log(5000./mesh->GetNE())/log(2.)/dim);
       for (int l = 0; l < ref_levels; l++)
       {
@@ -239,7 +245,7 @@ int main(int argc, char *argv[])
    //    constants coefficient lambda and mu.   
    //ConstantCoefficient lambda(1);
    //ConstantCoefficient mu(1);
-   double mu = 0.25, K = 150.0;  
+   double mu = 0.25, K = 15.0;  
    //double mu = 1.0, K = 1.67;
 
    Vector rhs;
@@ -249,8 +255,8 @@ int main(int argc, char *argv[])
    uh = 0.0;
 
    double force_step = 10.0e-4;
-   int num_steps = 50;
-   int sampling_steps = 5;
+   int num_steps = 1;
+   int sampling_steps = 1;
    for (int i = 0; i < num_steps; i++) {
 
      auto nl_form = std::make_shared<mfem::NonlinearForm>(fespace);
@@ -277,7 +283,7 @@ int main(int argc, char *argv[])
      J_minres->SetPreconditioner(*J_prec);
      J_solver = J_minres;
 
-     NewtonSolver newton_solver;
+     NewtonSolverLineSearch newton_solver;
      newton_solver.SetRelTol(1e-4);
      newton_solver.SetAbsTol(1e-6);
      newton_solver.SetMaxIter(2000);
@@ -290,7 +296,7 @@ int main(int argc, char *argv[])
 
      //13. Save the refined mesh and the solution.
      if (i % sampling_steps == 0) {
-       ofstream mesh_ofs("D:\\OneDrive\\Documents\\VisualStudio2017\\Projects\\mfem\\examples\\hyperelastic_sol_" + std::to_string(i) + ".vtk");
+       ofstream mesh_ofs("D:\\OneDrive\\Documents\\VisualStudio2017\\Projects\\mfem\\examples\\solution\\hyperelastic_sol_" + std::to_string(i) + ".vtk");
        mesh->PrintVTK(mesh_ofs, 1, 0);
        uh.SaveVTK(mesh_ofs, "u", 1);
      }
@@ -766,4 +772,89 @@ void HyperelasticTractionIntegrator::AssembleFaceGrad(const mfem::FiniteElement&
     }
     temp[j] = elfun[j];
   }
+}
+
+void NewtonSolverLineSearch::Mult(const Vector& b, Vector& x) const
+{
+  MFEM_ASSERT(oper != NULL, "the Operator is not set (use SetOperator).");
+  MFEM_ASSERT(prec != NULL, "the Solver is not set (use SetSolver).");
+
+  int it;
+  double norm0, norm, norm_goal;
+  const bool have_b = (b.Size() == Height());
+
+  if (!iterative_mode)
+  {
+    x = 0.0;
+  }
+  
+  oper->Mult(x, r);
+  
+  if (have_b)
+  {
+    r -= b;
+  }
+  //std::cout << "\nresidue: "; r.Print();
+  norm0 = norm = Norm(r);
+  norm_goal = std::max(rel_tol * norm, abs_tol);
+
+  prec->iterative_mode = false;
+
+  // x_{i+1} = x_i - [DF(x_i)]^{-1} [F(x_i)-b]
+  for (it = 0; true; it++)
+  {   
+    MFEM_ASSERT(IsFinite(norm), "norm = " << norm);
+    if (print_level >= 0)
+    {
+      mfem::out << "Newton iteration " << setw(2) << it
+        << " : ||r|| = " << norm;
+      if (it > 0)
+      {
+        mfem::out << ", ||r||/||r_0|| = " << norm / norm0;
+      }
+      mfem::out << '\n';
+    }
+
+    if (norm <= norm_goal)
+    {
+      converged = 1;
+      break;
+    }
+
+    if (it >= max_iter)
+    {
+      converged = 0;
+      break;
+    }
+
+    prec->SetOperator(oper->GetGradient(x));
+
+    prec->Mult(r, c);  // c = [DF(x_i)]^{-1} [F(x_i)-b]
+    //std::cout << "\nc in NS: "; c.Print();
+
+    //find the right step size to take using a simple line search algorithm
+    norm0 = norm;
+    double c_scale = 1.0; //default for newton method
+    bool step_not_found = true;
+    while (step_not_found) {
+      mfem::Vector x_i(x.Size());
+      x_i = 0.0;
+      add(x, -c_scale, c, x_i);
+      oper->Mult(x_i, r); //compute residue
+      if (have_b)
+        r -= b;
+
+      norm = Norm(r); // new norm
+
+      if (norm / norm0 < 10.0) {//check if the current step size is decreasing residue
+        step_not_found = false;
+        x = x_i;
+      }
+      else
+        c_scale /= 2.0;
+    }      
+  }
+
+  final_iter = it;
+  final_norm = norm;
 }
