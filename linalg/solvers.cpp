@@ -1327,13 +1327,17 @@ void NewtonSolver::Mult(const Vector &b, Vector &x) const
    {
       x = 0.0;
    }
-
+   /*std::cout << "\nx in NS: "; x.Print();
+   std::cout << "\nresidue: "; r.Print();
+   std::cout << "\nb in NS: "; b.Print();*/
    oper->Mult(x, r);
+   /*std::cout << "\nresidue: "; r.Print();
+   std::cout << "\nb in NS: "; b.Print();*/
    if (have_b)
    {
       r -= b;
    }
-
+   //std::cout << "\nresidue: "; r.Print();
    norm0 = norm = Norm(r);
    norm_goal = std::max(rel_tol*norm, abs_tol);
 
@@ -1342,6 +1346,8 @@ void NewtonSolver::Mult(const Vector &b, Vector &x) const
    // x_{i+1} = x_i - [DF(x_i)]^{-1} [F(x_i)-b]
    for (it = 0; true; it++)
    {
+     if (it == 8)
+       //return;
       MFEM_ASSERT(IsFinite(norm), "norm = " << norm);
       if (print_level >= 0)
       {
@@ -1369,18 +1375,21 @@ void NewtonSolver::Mult(const Vector &b, Vector &x) const
       prec->SetOperator(oper->GetGradient(x));
 
       prec->Mult(r, c);  // c = [DF(x_i)]^{-1} [F(x_i)-b]
-
+      //std::cout << "\nc in NS: "; c.Print();
       const double c_scale = ComputeScalingFactor(x, b);
+      
       if (c_scale == 0.0)
       {
          converged = 0;
          break;
       }
       add(x, -c_scale, c, x);
-
+      
       ProcessNewState(x);
 
       oper->Mult(x, r);
+      //std::cout << "\nresidue: "; r.Print();
+      
       if (have_b)
       {
          r -= b;

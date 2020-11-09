@@ -192,7 +192,7 @@ int main(int argc, char *argv[])
    //    largest number that gives a final mesh with no more than 5,000
    //    elements.
    {
-     int ref_levels = 2;
+     int ref_levels = 1;
          //(int)floor(log(5000./mesh->GetNE())/log(2.)/dim);
       for (int l = 0; l < ref_levels; l++)
       {
@@ -254,7 +254,7 @@ int main(int argc, char *argv[])
    GridFunction uh(fespace); //solution
    uh = 0.0;
 
-   double force_step = 10.0e-4;
+   double force_step =  200.0e-4;
    int num_steps = 1;
    int sampling_steps = 1;
    for (int i = 0; i < num_steps; i++) {
@@ -835,24 +835,61 @@ void NewtonSolverLineSearch::Mult(const Vector& b, Vector& x) const
     //find the right step size to take using a simple line search algorithm
     norm0 = norm;
     double c_scale = 1.0; //default for newton method
-    bool step_not_found = true;
-    while (step_not_found) {
-      mfem::Vector x_i(x.Size());
+    //bool step_not_found = true;
+    //while (step_not_found) {
+    //  mfem::Vector x_i(x.Size());
+    //  x_i = 0.0;
+    //  add(x, -c_scale, c, x_i);
+    //  oper->Mult(x_i, r); //compute residue
+    //  if (have_b)
+    //    r -= b;
+
+    //  norm = Norm(r); // new norm
+
+    //  if (norm / norm0 < 5.0) {//check if the current step size is decreasing residue
+    //    step_not_found = false;
+    //    x = x_i;
+    //  }
+    //  else
+    //    c_scale /= 2.0;
+    //}
+
+    mfem::Vector x_i(x.Size());
+    //quadratic line search
+    {      
       x_i = 0.0;
-      add(x, -c_scale, c, x_i);
-      oper->Mult(x_i, r); //compute residue
-      if (have_b)
-        r -= b;
+      add(x, -c_scale, c, x_i); //c_scale = 1.0
+      oper->Mult(x_i, r); 
+      double norm1 = Norm(r);
 
-      norm = Norm(r); // new norm
+      if (true || norm1 / norm0 < 10.0) {
 
-      if (norm / norm0 < 10.0) {//check if the current step size is decreasing residue
-        step_not_found = false;
+        x_i = 0.0;
+        add(x, -0.5, c, x_i);
+        oper->Mult(x_i, r); //compute residue
+        double norm2 = Norm(r);
+
+        //if norm0, norm2, and norm1 are three points on a parabola norm(t) = A.t^2 + B.t + C (where t = c_scale)
+        double A = 2 * norm1 + 2 * norm0 - 4 * norm2;
+        double B = 4 * (norm2 - 0.25 * norm1 - 0.75 * norm0);
+
+        //minimize norm (for a quadratic funtion, min is for t= -B/2A)
+        if (A != 0) {
+          c_scale = -B / (2 * A);
+          std::cout << "\nc_scale: " << c_scale;
+          add(x, -c_scale, c, x);
+          oper->Mult(x, r);
+          norm = Norm(r);
+          if (c_scale > 1 || c_scale < 0)
+            std::cout << "\nLine search step outside [0,1]";         
+        }
+        else
+          std::cout << "\nLine search using Quadratic function failed!\n";
+      } else {
         x = x_i;
+        norm = norm1;
       }
-      else
-        c_scale /= 2.0;
-    }      
+    }
   }
 
   final_iter = it;

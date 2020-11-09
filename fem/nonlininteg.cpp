@@ -229,9 +229,13 @@ double NeoHookeanModel::EvalW(const DenseMatrix &J) const
       EvalCoeffs();
    }
 
-   double dJ = J.Det();
+   //Green strain B
+   DenseMatrix B(3, 3);
+   MultAAt(J, B);
+
+   double dJ = sqrt(B.Det()); //J.Det();
    double sJ = dJ/g;
-   double bI1 = pow(dJ, -2.0/dim)*(J*J); // \bar{I}_1
+   double bI1 = pow(dJ, -2.0/dim)*(B.Trace()); // \bar{I}_1
 
    return 0.5*(mu*(bI1 - dim) + K*(sJ - 1.0)*(sJ - 1.0));
 }
@@ -248,9 +252,14 @@ void NeoHookeanModel::EvalP(const DenseMatrix &J, DenseMatrix &P) const
    Z.SetSize(dim);
    CalcAdjugateTranspose(J, Z);
 
-   double dJ = J.Det();
+
+   //Green strain B
+   DenseMatrix B(3, 3);
+   MultAAt(J, B);
+
+   double dJ = sqrt(B.Det());//J.Det();
    double a  = mu*pow(dJ, -2.0/dim);
-   double b  = K*(dJ/g - 1.0)/g - a*(J*J)/(dim*dJ);
+   double b  = K*(dJ/g - 1.0)/g - a*(B.Trace())/(dim*dJ);
 
    P = 0.0;
    P.Add(a, J);
@@ -396,11 +405,15 @@ void HyperelasticNLFIntegrator::AssembleElementVector(
       Mult(DSh, Jrt, DS);
       MultAtB(PMatI, DS, Jpt);
 
-      model->EvalP(Jpt, P);
-
+      //std::cout << "\nJacobian det: " << Jpt.Det();
+      model->EvalP(Jpt, P);           
+      //std::cout << "\nP0: " << P(0,0);
       P *= ip.weight * Ttr.Weight();
+      if (std::isfinite(P(0, 0)) == 0)
+        std::cout << "\nsomething wong;";
       AddMultABt(DS, P, PMatO);
-   }
+   }   
+   //std::cout << "\nEl Vector O: "; elvect.Print();
 }
 
 void HyperelasticNLFIntegrator::AssembleElementGrad(const FiniteElement &el,
