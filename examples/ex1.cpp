@@ -148,12 +148,12 @@ public:
     int dim = el.GetDim();
     int spaceDim = Trans.GetSpaceDim();
     bool square = (dim == spaceDim);
-    double w;
+    double w, jacobian;
 
     dshape.SetSize(nd, dim);
     dshapedxt.SetSize(nd, spaceDim);
     invdfdx.SetSize(dim, spaceDim);
-
+    shape.SetSize(nd);
     elmat.SetSize(nd);
 
     const IntegrationRule ir = IntRules.Get(el.GetGeomType(), intorder);
@@ -163,13 +163,26 @@ public:
     {
       const IntegrationPoint& ip = ir.IntPoint(i);
       el.CalcDShape(ip, dshape);
+      el.CalcShape(ip, shape);
 
       Trans.SetIntPoint(&ip);
       w = Trans.Weight();
       w = ip.weight / (square ? w : w * w * w);
-      
+      jacobian = Trans.Jacobian().Elem(0,0);
+
       Vector d_dx;
       omega->Eval(d_dx, Trans, ip);
+
+      //scale the omega derivitve to reference space
+      d_dx[1] = d_dx[1] * jacobian;
+
+      //modify dshape to include omega
+      auto dshape_data = dshape.Data();
+      for (int i = 0; i < shape.Size(); i++) {
+        // Liebniz rule
+        dshape_data[i] = dshape_data[i] * d_dx[0] +
+          shape[i] * d_dx[1];
+      }
       
       // AdjugateJacobian = / adj(J),         if J is square
       //                    \ adj(J^t.J).J^t, otherwise
@@ -210,7 +223,7 @@ int main(int argc, char *argv[])
    // 3. Read the mesh from the given mesh file. We can handle triangular,
    //    quadrilateral, tetrahedral, hexahedral, surface and volume meshes with
    //    the same code.
-   Mesh *mesh = new Mesh(10,2.0);
+   Mesh *mesh = new Mesh(10,1.0);
    int dim = mesh->Dimension();  
 
    // 5. Define a finite element space on the mesh. Here we use continuous
@@ -231,7 +244,7 @@ int main(int argc, char *argv[])
    Array<int> ess_tdof_list, ess_bdr(mesh->bdr_attributes.Max());
    ess_bdr = 0;
    ess_bdr[0] = 1;
-   fespace->GetEssentialTrueDofs(ess_bdr, ess_tdof_list);
+   //fespace->GetEssentialTrueDofs(ess_bdr, ess_tdof_list);
    cout << "\nessential dofs: ";
    ess_tdof_list.Print();
 
@@ -296,16 +309,48 @@ int main(int argc, char *argv[])
    // 12. Recover the solution as a finite element grid function.
    a->RecoverFEMSolution(X, rhs, x);
    //cout << "\nSolution: "; x.Print();
-
+    
    GridFunction grad_x(fespace);
    grad_x = 0.0;
    x.GetDerivative(1, 0, grad_x);
    //cout << "\nGrad X"; grad_x.Print();
 
+   //apply solution structure
+   GridFunction omega_gf(fespace), omegagrad_gf(fespace);
+   omega_gf = 0.0; omegagrad_gf = 0.0;
+
+   GridFunction x_omega(fespace), gradx_omega(fespace);
+   x_omega = 0.0; gradx_omega = 0.0;
+
+   auto x_data = x.GetData();
+   auto gradx_data = grad_x.GetData();
+   auto x_omega_data = x_omega.GetData();
+   auto gradx_omega_data = gradx_omega.GetData();
+
+   for (int i = 0; i < x.Size(); i++) {
+     //query omega
+     Vector point_vec(1), d_dx(2);
+     point_vec(0) = mesh->GetVertex(i)[0];
+     omega_function(point_vec, d_dx);
+     
+     //change the solution and it's grad
+     x_omega_data[i] = x_data[i] * d_dx[0];
+     gradx_omega_data[i] = gradx_data[i] * d_dx[0] + x_data[i] * d_dx[1];
+
+     //store the omega and omega_grad
+     omega_gf(i) = d_dx[0];
+     omegagrad_gf(i) = d_dx[1];
+   }
+
+
    ofstream vtk_ofs("D:\\OneDrive\\Documents\\VisualStudio2017\\Projects\\mfem\\examples\\ex1_sol.vtk");
    mesh->PrintVTK(vtk_ofs, 1, 0);
-   x.SaveVTK(vtk_ofs, "sol", 1);
-   grad_x.SaveVTK(vtk_ofs, "grad_x", 1);
+   x.SaveVTK(vtk_ofs, "sol_wo_omega", 1);
+   grad_x.SaveVTK(vtk_ofs, "sol_grad_wo_omega", 1);
+   x_omega.SaveVTK(vtk_ofs, "sol", 1);
+   gradx_omega.SaveVTK(vtk_ofs, "sol_grad", 1);
+   omega_gf.SaveVTK(vtk_ofs, "omega", 1);
+   omegagrad_gf.SaveVTK(vtk_ofs, "omega_grad", 1);
       
    // 15. Free the used memory.
    delete a;   
