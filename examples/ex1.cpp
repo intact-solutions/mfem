@@ -57,13 +57,22 @@
 using namespace std;
 using namespace mfem;
 
+double omega_cutoff = 1, omega_order = 1;
+
 // Initial condition
 void omega_function(const Vector& x, Vector &y) {
   y.SetSize(2);
-  y[0] = x[0];
-  y[1] = 1; //derivitive of x
-};
-
+   
+  if (x[0] < omega_cutoff) {
+    double exp = 1 - x[0] / omega_cutoff;
+    y[0] = omega_cutoff / omega_order * (1 - pow(exp, omega_order));
+    y[1] = pow(exp, omega_order - 1);
+  }
+  else {
+    y[0] = omega_cutoff / omega_order;
+    y[1] = 0;
+  }
+ };
 
 /** Class for integrating the bilinear form a(u,v) := (Q grad u, grad v) where Q
     can be a scalar or a matrix coefficient. */
@@ -209,11 +218,19 @@ public:
 int main(int argc, char *argv[])
 {
    // 1. Parse command-line options.   
-   int order = 1;
    bool static_cond = false;
    bool pa = false;
    const char *device_config = "cpu";
    bool visualization = true;
+
+   int element_order = 1;
+   omega_order = 3;
+   omega_cutoff = 0.1;
+   double integration_order = omega_order; //2n-1 --> accuracy of guassian quadrature
+
+   double num_elements = 20;
+   double geometry_length = 1.0;
+   double applied_load = 5.0;
 
    // 2. Enable hardware devices such as GPUs, and programming models such as
    //    CUDA, OCCA, RAJA and OpenMP based on command line options.
@@ -223,14 +240,14 @@ int main(int argc, char *argv[])
    // 3. Read the mesh from the given mesh file. We can handle triangular,
    //    quadrilateral, tetrahedral, hexahedral, surface and volume meshes with
    //    the same code.
-   Mesh *mesh = new Mesh(10,1.0);
+   Mesh *mesh = new Mesh(num_elements, geometry_length);
    int dim = mesh->Dimension();  
 
    // 5. Define a finite element space on the mesh. Here we use continuous
    //    Lagrange finite elements of the specified order. If order < 1, we
    //    instead use an isoparametric/isogeometric space.
    FiniteElementCollection *fec;
-   fec = new H1_FECollection(order = 1, dim);
+   fec = new H1_FECollection(element_order, dim);
 
    FiniteElementSpace *fespace = new FiniteElementSpace(mesh, fec);
    cout << "Number of finite element unknowns: "
@@ -247,11 +264,15 @@ int main(int argc, char *argv[])
    //fespace->GetEssentialTrueDofs(ess_bdr, ess_tdof_list);
    cout << "\nessential dofs: ";
    ess_tdof_list.Print();
+   
+   //assign load after modifying it by solution structure
+   Vector point_vec(1), d_dx(2);
+   point_vec(0) = geometry_length; 
+   omega_function(point_vec, d_dx); 
 
-  
    Vector rhs(size);
-   rhs = 0.0;   
-   rhs[size-1] = 5.0;
+   rhs = 0.0;
+   rhs[size-1] = applied_load * d_dx[0];
    cout << "\nRHS: ";
    rhs.Print();
    
@@ -270,7 +291,7 @@ int main(int argc, char *argv[])
 
    BilinearForm *a = new BilinearForm(fespace);
    if (pa) { a->SetAssemblyLevel(AssemblyLevel::PARTIAL); }
-   a->AddDomainIntegrator(new DiffusionIntegrator_Omega(one, 2, omega));
+   a->AddDomainIntegrator(new DiffusionIntegrator_Omega(one, integration_order, omega));
 
    // 10. Assemble the bilinear form and the corresponding linear system,
    //     applying any necessary transformations such as: eliminating boundary
@@ -319,8 +340,21 @@ int main(int argc, char *argv[])
    GridFunction omega_gf(fespace), omegagrad_gf(fespace);
    omega_gf = 0.0; omegagrad_gf = 0.0;
 
+   //solution with solution structure
    GridFunction x_omega(fespace), gradx_omega(fespace);
    x_omega = 0.0; gradx_omega = 0.0;
+
+   //exact solution without solution structure
+   GridFunction x_exact_wo(fespace), gradx_exact_wo(fespace);
+   x_exact_wo = 0.0; gradx_exact_wo = 0.0;
+
+   //exact solution with solution structure
+   GridFunction x_exact(fespace), gradx_exact(fespace);
+   x_exact = 0.0; gradx_exact = 0.0;
+
+   //error
+   GridFunction grad_error(fespace); GridFunction zero(fespace);
+   grad_error = 0.0; zero = 0.0;
 
    auto x_data = x.GetData();
    auto gradx_data = grad_x.GetData();
@@ -340,22 +374,41 @@ int main(int argc, char *argv[])
      //store the omega and omega_grad
      omega_gf(i) = d_dx[0];
      omegagrad_gf(i) = d_dx[1];
-   }
 
+     //exact solution without solution structure
+     x_exact_wo[i] = i == 0? applied_load : applied_load * point_vec(0)/d_dx[0];
+     gradx_exact_wo[i] = i == 0? applied_load : (applied_load - d_dx[1]* x_exact_wo[i])/d_dx[0];
+
+     //exact solution
+     x_exact[i] = point_vec(0) * applied_load;
+     gradx_exact[i] = applied_load;
+
+     //error
+     grad_error[i] = (gradx_exact[i] - gradx_omega_data[i])/ gradx_exact[i] * 100.0;
+   }   
 
    ofstream vtk_ofs("D:\\OneDrive\\Documents\\VisualStudio2017\\Projects\\mfem\\examples\\ex1_sol.vtk");
    mesh->PrintVTK(vtk_ofs, 1, 0);
-   x.SaveVTK(vtk_ofs, "sol_wo_omega", 1);
-   grad_x.SaveVTK(vtk_ofs, "sol_grad_wo_omega", 1);
+   x.SaveVTK(vtk_ofs, "sol_wo", 1);
+   grad_x.SaveVTK(vtk_ofs, "sol_grad_wo", 1);
    x_omega.SaveVTK(vtk_ofs, "sol", 1);
    gradx_omega.SaveVTK(vtk_ofs, "sol_grad", 1);
    omega_gf.SaveVTK(vtk_ofs, "omega", 1);
    omegagrad_gf.SaveVTK(vtk_ofs, "omega_grad", 1);
-      
+   x_exact_wo.SaveVTK(vtk_ofs, "sol_wo_exact", 1);
+   gradx_exact_wo.SaveVTK(vtk_ofs, "sol_grad_wo_exact", 1);
+   x_exact.SaveVTK(vtk_ofs, "sol_exact", 1);
+   gradx_exact.SaveVTK(vtk_ofs, "sol_grad_exact", 1);
+   grad_error.SaveVTK(vtk_ofs, "error_grad", 1);
+   zero.SaveVTK(vtk_ofs, "zero", 1);
+   
+   std::ofstream fout("D:\\OneDrive\\Documents\\VisualStudio2017\\Projects\\mfem\\examples\\error.txt");
+   grad_error.Save(fout);
+
    // 15. Free the used memory.
    delete a;   
    delete fespace;
-   if (order > 0) { delete fec; }
+   if (element_order > 0) { delete fec; }
    delete mesh;
 
    return 0;
