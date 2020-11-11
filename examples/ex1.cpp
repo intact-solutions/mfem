@@ -57,6 +57,16 @@
 using namespace std;
 using namespace mfem;
 
+void velocity_function(const Vector& x, Vector& v) {
+  int dim = x.Size();
+
+  // map to the reference [-1,1] domain
+  v.SetSize(dim);
+  v[0] = 8; 
+  v[1] = 0.0;
+  v[2] = 0.0;
+};
+
 int main(int argc, char *argv[])
 {
    // 1. Parse command-line options.
@@ -153,7 +163,7 @@ int main(int argc, char *argv[])
    //    the basis functions in the finite element fespace.
    Vector heat(mesh->bdr_attributes.Max());
    heat = 0.0;
-   heat(1) = 1.0;
+   heat(1) = -1.0;
    PWConstCoefficient q(heat);
 
    LinearForm* b = new LinearForm(fespace);
@@ -176,6 +186,11 @@ int main(int argc, char *argv[])
    BilinearForm *a = new BilinearForm(fespace);
    if (pa) { a->SetAssemblyLevel(AssemblyLevel::PARTIAL); }
    a->AddDomainIntegrator(new DiffusionIntegrator(k));
+
+
+   //add the convection term
+   VectorFunctionCoefficient velocity(dim, velocity_function);
+   a->AddDomainIntegrator(new ConvectionIntegrator(velocity, 1));
   
    // 10. Assemble the bilinear form and the corresponding linear system,
    //     applying any necessary transformations such as: eliminating boundary
@@ -199,8 +214,9 @@ int main(int argc, char *argv[])
    {
 #ifndef MFEM_USE_SUITESPARSE
       // Use a simple symmetric Gauss-Seidel preconditioner with PCG.
+          
       GSSmoother M((SparseMatrix&)(*A));
-      PCG(*A, M, B, X, 1, 200, 1e-12, 0.0);
+      GMRES((SparseMatrix&)(*A), M, *b, x, 1, 200, 10, 1e-12, 0.0);
 #else
       // If MFEM was compiled with SuiteSparse, use UMFPACK to solve the system.
       UMFPackSolver umf_solver;
