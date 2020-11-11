@@ -59,11 +59,10 @@ using namespace mfem;
 
 double omega_cutoff = 1, omega_order = 1;
 
-// Initial condition
 void omega_function(const Vector& x, Vector &y) {
   y.SetSize(2);
    
-  if (x[0] < omega_cutoff) {
+  if (x[0] <= omega_cutoff) {
     double exp = 1 - x[0] / omega_cutoff;
     y[0] = omega_cutoff / omega_order * (1 - pow(exp, omega_order));
     y[1] = pow(exp, omega_order - 1);
@@ -73,6 +72,27 @@ void omega_function(const Vector& x, Vector &y) {
     y[1] = 0;
   }
  };
+
+// Initial condition
+double omega_only_function(const Vector& x) {
+  if (x[0] <= omega_cutoff) {
+    double exp = 1 - x[0] / omega_cutoff;
+    return omega_cutoff / omega_order * (1 - pow(exp, omega_order));  
+  }
+  else {
+    return omega_cutoff / omega_order;
+  }
+};
+
+double omegagrad_only_function(const Vector& x) {
+  if (x[0] <= omega_cutoff) {
+    double exp = 1 - x[0] / omega_cutoff;
+    return pow(exp, omega_order - 1);
+  }
+  else {
+    return 0;
+  }
+};
 
 /** Class for integrating the bilinear form a(u,v) := (Q grad u, grad v) where Q
     can be a scalar or a matrix coefficient. */
@@ -212,6 +232,7 @@ public:
         AddMultABt(dshape, dshapedxt, elmat);
       }
     }
+    //cout << "\nelamt: ";  elmat.Print();
   };  
 };
 
@@ -223,19 +244,20 @@ int main(int argc, char *argv[])
    const char *device_config = "cpu";
    bool visualization = true;
 
-   int element_order = 1;
-   omega_order = 3;
-   omega_cutoff = 0.1;
-   double integration_order = omega_order; //2n-1 --> accuracy of guassian quadrature
+   int element_order = 2;
+   omega_order = 1;   
+   double integration_order = ( omega_order + element_order + 1); //2n-1 --> accuracy of guassian quadrature
+   cout << "\nintegration order: " << integration_order;
 
-   double num_elements = 20;
+   double num_elements = 10;
    double geometry_length = 1.0;
+   omega_cutoff = 1.0;
    double applied_load = 5.0;
+   int sampling_mesh_ref = 10;
 
    // 2. Enable hardware devices such as GPUs, and programming models such as
    //    CUDA, OCCA, RAJA and OpenMP based on command line options.
    Device device(device_config);
-   device.Print();
 
    // 3. Read the mesh from the given mesh file. We can handle triangular,
    //    quadrilateral, tetrahedral, hexahedral, surface and volume meshes with
@@ -250,7 +272,7 @@ int main(int argc, char *argv[])
    fec = new H1_FECollection(element_order, dim);
 
    FiniteElementSpace *fespace = new FiniteElementSpace(mesh, fec);
-   cout << "Number of finite element unknowns: "
+   cout << "\nNumber of finite element unknowns: "
         << fespace->GetTrueVSize() << endl;
    int size = fespace->GetVSize();
 
@@ -272,31 +294,24 @@ int main(int argc, char *argv[])
 
    Vector rhs(size);
    rhs = 0.0;
-   rhs[size-1] = applied_load * d_dx[0];
+   rhs[mesh->GetNV()-1] = applied_load * d_dx[0]; //use the index from mesh as fespace indexing is not linear in x
    cout << "\nRHS: ";
    rhs.Print();
    
    ConstantCoefficient one(1.0);
    
    // 8. Define the solution vector x as a finite element grid function
-   //    corresponding to fespace. Initialize x with initial guess of zero,
-   //    which satisfies the boundary conditions.
    GridFunction x(fespace);
    x = 0.0;
 
-   // 9. Set up the bilinear form a(.,.) on the finite element space
-   //    corresponding to the Laplacian operator -Delta, by adding the Diffusion
-   //    domain integrator.
+   // 9. Set up the bilinear form a(.,.) 
    VectorFunctionCoefficient omega(2, omega_function);
 
    BilinearForm *a = new BilinearForm(fespace);
    if (pa) { a->SetAssemblyLevel(AssemblyLevel::PARTIAL); }
    a->AddDomainIntegrator(new DiffusionIntegrator_Omega(one, integration_order, omega));
 
-   // 10. Assemble the bilinear form and the corresponding linear system,
-   //     applying any necessary transformations such as: eliminating boundary
-   //     conditions, applying conforming constraints for non-conforming AMR,
-   //     static condensation, etc.
+   // 10. Assemble the bilinear form 
    if (static_cond) { a->EnableStaticCondensation(); }
    a->Assemble();
 
@@ -340,9 +355,16 @@ int main(int argc, char *argv[])
    GridFunction omega_gf(fespace), omegagrad_gf(fespace);
    omega_gf = 0.0; omegagrad_gf = 0.0;
 
+   //obtain omega and omega grad using projection
+   FunctionCoefficient omega_only(omega_only_function);
+   omega_gf.ProjectCoefficient(omega_only);
+
+   FunctionCoefficient omegagrad_only(omegagrad_only_function);
+   omegagrad_gf.ProjectCoefficient(omegagrad_only);
+
    //solution with solution structure
    GridFunction x_omega(fespace), gradx_omega(fespace);
-   x_omega = 0.0; gradx_omega = 0.0;
+   x_omega = 0.0; gradx_omega = 0.0;  
 
    //exact solution without solution structure
    GridFunction x_exact_wo(fespace), gradx_exact_wo(fespace);
@@ -359,25 +381,17 @@ int main(int argc, char *argv[])
    auto x_data = x.GetData();
    auto gradx_data = grad_x.GetData();
    auto x_omega_data = x_omega.GetData();
-   auto gradx_omega_data = gradx_omega.GetData();
+   auto gradx_omega_data = gradx_omega.GetData();   
 
-   for (int i = 0; i < x.Size(); i++) {
-     //query omega
-     Vector point_vec(1), d_dx(2);
-     point_vec(0) = mesh->GetVertex(i)[0];
-     omega_function(point_vec, d_dx);
+   for (int i = 0; i < x.Size(); i++) {   
      
      //change the solution and it's grad
-     x_omega_data[i] = x_data[i] * d_dx[0];
-     gradx_omega_data[i] = gradx_data[i] * d_dx[0] + x_data[i] * d_dx[1];
-
-     //store the omega and omega_grad
-     omega_gf(i) = d_dx[0];
-     omegagrad_gf(i) = d_dx[1];
+     x_omega_data[i] = x_data[i] * omega_gf(i);
+     gradx_omega_data[i] = gradx_data[i] * omega_gf(i) + x_data[i] * omegagrad_gf(i);    
 
      //exact solution without solution structure
-     x_exact_wo[i] = i == 0? applied_load : applied_load * point_vec(0)/d_dx[0];
-     gradx_exact_wo[i] = i == 0? applied_load : (applied_load - d_dx[1]* x_exact_wo[i])/d_dx[0];
+     x_exact_wo[i] = i == 0? applied_load : applied_load * point_vec(0)/ omega_gf(i);
+     gradx_exact_wo[i] = i == 0? applied_load : (applied_load - omegagrad_gf(i) * x_exact_wo[i])/ omega_gf(i);
 
      //exact solution
      x_exact[i] = point_vec(0) * applied_load;
@@ -388,19 +402,20 @@ int main(int argc, char *argv[])
    }   
 
    ofstream vtk_ofs("D:\\OneDrive\\Documents\\VisualStudio2017\\Projects\\mfem\\examples\\ex1_sol.vtk");
-   mesh->PrintVTK(vtk_ofs, 1, 0);
-   x.SaveVTK(vtk_ofs, "sol_wo", 1);
-   grad_x.SaveVTK(vtk_ofs, "sol_grad_wo", 1);
-   x_omega.SaveVTK(vtk_ofs, "sol", 1);
-   gradx_omega.SaveVTK(vtk_ofs, "sol_grad", 1);
-   omega_gf.SaveVTK(vtk_ofs, "omega", 1);
-   omegagrad_gf.SaveVTK(vtk_ofs, "omega_grad", 1);
-   x_exact_wo.SaveVTK(vtk_ofs, "sol_wo_exact", 1);
-   gradx_exact_wo.SaveVTK(vtk_ofs, "sol_grad_wo_exact", 1);
-   x_exact.SaveVTK(vtk_ofs, "sol_exact", 1);
-   gradx_exact.SaveVTK(vtk_ofs, "sol_grad_exact", 1);
-   grad_error.SaveVTK(vtk_ofs, "error_grad", 1);
-   zero.SaveVTK(vtk_ofs, "zero", 1);
+  
+   mesh->PrintVTK(vtk_ofs, sampling_mesh_ref, 0);
+   x.SaveVTK(vtk_ofs, "sol_wo", sampling_mesh_ref);
+   grad_x.SaveVTK(vtk_ofs, "sol_grad_wo", sampling_mesh_ref);
+   x_omega.SaveVTK(vtk_ofs, "sol", sampling_mesh_ref);
+   gradx_omega.SaveVTK(vtk_ofs, "sol_grad", sampling_mesh_ref);
+   omega_gf.SaveVTK(vtk_ofs, "omega", sampling_mesh_ref);
+   omegagrad_gf.SaveVTK(vtk_ofs, "omega_grad", sampling_mesh_ref);
+   x_exact_wo.SaveVTK(vtk_ofs, "sol_wo_exact", sampling_mesh_ref);
+   gradx_exact_wo.SaveVTK(vtk_ofs, "sol_grad_wo_exact", sampling_mesh_ref);
+   x_exact.SaveVTK(vtk_ofs, "sol_exact", sampling_mesh_ref);
+   gradx_exact.SaveVTK(vtk_ofs, "sol_grad_exact", sampling_mesh_ref);
+   grad_error.SaveVTK(vtk_ofs, "error_grad", sampling_mesh_ref);
+   zero.SaveVTK(vtk_ofs, "zero", sampling_mesh_ref);
    
    std::ofstream fout("D:\\OneDrive\\Documents\\VisualStudio2017\\Projects\\mfem\\examples\\error.txt");
    grad_error.Save(fout);
