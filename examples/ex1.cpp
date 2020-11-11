@@ -60,7 +60,7 @@ using namespace mfem;
 int main(int argc, char *argv[])
 {
    // 1. Parse command-line options.
-   const char *mesh_file = "../data/star.mesh";
+   const char *mesh_file = "../data/beam-hex.mesh";
    int order = 1;
    bool static_cond = false;
    bool pa = false;
@@ -106,12 +106,12 @@ int main(int argc, char *argv[])
    //    largest number that gives a final mesh with no more than 50,000
    //    elements.
    {
-      int ref_levels =
+      /*int ref_levels =
          (int)floor(log(50000./mesh->GetNE())/log(2.)/dim);
       for (int l = 0; l < ref_levels; l++)
       {
          mesh->UniformRefinement();
-      }
+      }*/
    }
 
    // 5. Define a finite element space on the mesh. Here we use continuous
@@ -143,17 +143,25 @@ int main(int argc, char *argv[])
    if (mesh->bdr_attributes.Size())
    {
       Array<int> ess_bdr(mesh->bdr_attributes.Max());
-      ess_bdr = 1;
+      ess_bdr = 0;
+      ess_bdr[0] = 1;      
       fespace->GetEssentialTrueDofs(ess_bdr, ess_tdof_list);
    }
-
+   cout << "\nessential dofs: "; ess_tdof_list.Print();
    // 7. Set up the linear form b(.) which corresponds to the right-hand side of
    //    the FEM linear system, which in this case is (1,phi_i) where phi_i are
    //    the basis functions in the finite element fespace.
-   LinearForm *b = new LinearForm(fespace);
-   ConstantCoefficient one(1.0);
-   b->AddDomainIntegrator(new DomainLFIntegrator(one));
+   Vector heat(mesh->bdr_attributes.Max());
+   heat = 0.0;
+   heat(1) = 1.0;
+   PWConstCoefficient q(heat);
+
+   LinearForm* b = new LinearForm(fespace);
+   b->AddBoundaryIntegrator(new BoundaryLFIntegrator(q));
+   cout << "r.h.s. ... " << flush;
    b->Assemble();
+
+   cout << "\nRHS: "; b->Print();
 
    // 8. Define the solution vector x as a finite element grid function
    //    corresponding to fespace. Initialize x with initial guess of zero,
@@ -164,23 +172,28 @@ int main(int argc, char *argv[])
    // 9. Set up the bilinear form a(.,.) on the finite element space
    //    corresponding to the Laplacian operator -Delta, by adding the Diffusion
    //    domain integrator.
+   ConstantCoefficient k(1.0);
    BilinearForm *a = new BilinearForm(fespace);
    if (pa) { a->SetAssemblyLevel(AssemblyLevel::PARTIAL); }
-   a->AddDomainIntegrator(new DiffusionIntegrator(one));
-
+   a->AddDomainIntegrator(new DiffusionIntegrator(k));
+  
    // 10. Assemble the bilinear form and the corresponding linear system,
    //     applying any necessary transformations such as: eliminating boundary
    //     conditions, applying conforming constraints for non-conforming AMR,
    //     static condensation, etc.
    if (static_cond) { a->EnableStaticCondensation(); }
    a->Assemble();
-
+   a->Finalize();
+ 
    OperatorPtr A;
    Vector B, X;
    a->FormLinearSystem(ess_tdof_list, x, *b, A, X, B);
 
    cout << "Size of linear system: " << A->Height() << endl;
-
+   cout << "\nLHS: ";  
+   for (int i = 0; i < a->Size(); i++) {
+     cout << a->Elem(i, i) << ", ";
+   }  
    // 11. Solve the linear system A X = B.
    if (!pa)
    {
@@ -207,26 +220,14 @@ int main(int argc, char *argv[])
 
    // 13. Save the refined mesh and the solution. This output can be viewed later
    //     using GLVis: "glvis -m refined.mesh -g sol.gf".
-   ofstream mesh_ofs("refined.mesh");
-   mesh_ofs.precision(8);
-   mesh->Print(mesh_ofs);
-   ofstream sol_ofs("sol.gf");
-   sol_ofs.precision(8);
-   x.Save(sol_ofs);
-
-   // 14. Send the solution by socket to a GLVis server.
-   if (visualization)
-   {
-      char vishost[] = "localhost";
-      int  visport   = 19916;
-      socketstream sol_sock(vishost, visport);
-      sol_sock.precision(8);
-      sol_sock << "solution\n" << *mesh << x << flush;
-   }
+   ofstream vtk_ofs("D:\\OneDrive\\Documents\\VisualStudio2017\\Projects\\mfem\\examples\\conjugate_sol.vtk");
+   vtk_ofs.precision(8);
+   mesh->PrintVTK(vtk_ofs, 1, 0);
+   x.SaveVTK(vtk_ofs, "Temp", 1);
 
    // 15. Free the used memory.
    delete a;
-   delete b;
+   delete b;  
    delete fespace;
    if (order > 0) { delete fec; }
    delete mesh;
