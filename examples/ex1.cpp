@@ -62,10 +62,94 @@ void velocity_function(const Vector& x, Vector& v) {
 
   // map to the reference [-1,1] domain
   v.SetSize(dim);
-  v[0] = 8; 
+  v[0] = 100; 
   v[1] = 0.0;
   v[2] = 0.0;
 };
+
+/// alpha (q . grad u, v)
+class ConvectionIntegratorStabilized : public BilinearFormIntegrator
+{
+protected:
+  VectorCoefficient* Q;
+  double alpha;
+
+private:
+#ifndef MFEM_THREAD_SAFE
+  DenseMatrix dshape, adjJ, Q_ir;
+  Vector shape, vec2, BdFidxT;
+#endif
+
+public:
+  ConvectionIntegratorStabilized(VectorCoefficient& q, double a = 1.0)
+    : Q(&q) {
+    alpha = a;
+  }
+  virtual void AssembleElementMatrix( const FiniteElement& el, ElementTransformation& Trans, DenseMatrix& elmat)
+  {
+    int nd = el.GetDof();
+    int dim = el.GetDim();
+
+#ifdef MFEM_THREAD_SAFE
+    DenseMatrix dshape, adjJ, Q_ir;
+    Vector shape, vec2, BdFidxT;
+#endif
+    elmat.SetSize(nd);
+    dshape.SetSize(nd, dim);
+    adjJ.SetSize(dim);
+    shape.SetSize(nd);
+    vec2.SetSize(dim);
+    BdFidxT.SetSize(nd);
+
+    Vector vec1;
+
+    const IntegrationRule* ir = IntRule;
+    if (ir == NULL)
+    {
+      int order = Trans.OrderGrad(&el) + Trans.Order() + el.GetOrder();
+      ir = &IntRules.Get(el.GetGeomType(), order);
+    }
+
+    Q->Eval(Q_ir, Trans, *ir);
+    
+
+    elmat = 0.0;
+    for (int i = 0; i < ir->GetNPoints(); i++)
+    {
+      const IntegrationPoint& ip = ir->IntPoint(i);
+      el.CalcDShape(ip, dshape);
+      el.CalcShape(ip, shape);
+
+      Trans.SetIntPoint(&ip);
+      CalcAdjugate(Trans.Jacobian(), adjJ);
+      Q_ir.GetColumnReference(i, vec1);     
+
+      vec1 *= alpha * ip.weight;      
+
+      adjJ.Mult(vec1, vec2);
+      dshape.Mult(vec2, BdFidxT);
+
+      double he = std::pow(Trans.Jacobian().Det(), 1/3);
+            
+      auto vec1_norm2 = vec1.Norml2();
+      DenseMatrix normalized_vec1(dim, 1);
+      if (vec1_norm2 > 1e-8) {
+        for (int j = 0; j < dim; j++)
+          normalized_vec1(j, 0) = 0.5* he* vec1[j]/vec1_norm2;
+      }
+      DenseMatrix stablizer;
+      stablizer.SetSize(nd, 1);
+      Mult(dshape, normalized_vec1, stablizer);
+      Vector shape_mod(nd);
+      for (int k = 0; k < nd; k++) {
+        shape_mod[k] = shape[k] + stablizer(k, 0);
+      }
+
+      AddMultVWt(shape_mod, BdFidxT, elmat);
+    }
+  };
+};
+
 
 int main(int argc, char *argv[])
 {
@@ -190,7 +274,7 @@ int main(int argc, char *argv[])
 
    //add the convection term
    VectorFunctionCoefficient velocity(dim, velocity_function);
-   a->AddDomainIntegrator(new ConvectionIntegrator(velocity, 1));
+   a->AddDomainIntegrator(new ConvectionIntegratorStabilized(velocity, 1));
   
    // 10. Assemble the bilinear form and the corresponding linear system,
    //     applying any necessary transformations such as: eliminating boundary
