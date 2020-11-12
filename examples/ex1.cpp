@@ -57,6 +57,7 @@
 using namespace std;
 using namespace mfem;
 
+GridFunction DarcyFlowSolver(Mesh* mesh, int order, bool pa, bool static_cond);
 void velocity_function(const Vector& x, Vector& v) {
   int dim = x.Size();
 
@@ -124,7 +125,7 @@ public:
       CalcAdjugate(Trans.Jacobian(), adjJ);
       Q_ir.GetColumnReference(i, vec1);     
 
-      vec1 *= alpha * ip.weight;      
+      vec1 *= alpha * ip.weight * -1;      
 
       adjJ.Mult(vec1, vec2);
       dshape.Mult(vec2, BdFidxT);
@@ -195,18 +196,7 @@ int main(int argc, char *argv[])
    Mesh *mesh = new Mesh(mesh_file, 1, 1);
    int dim = mesh->Dimension();
 
-   // 4. Refine the mesh to increase the resolution. In this example we do
-   //    'ref_levels' of uniform refinement. We choose 'ref_levels' to be the
-   //    largest number that gives a final mesh with no more than 50,000
-   //    elements.
-   {
-      /*int ref_levels =
-         (int)floor(log(50000./mesh->GetNE())/log(2.)/dim);
-      for (int l = 0; l < ref_levels; l++)
-      {
-         mesh->UniformRefinement();
-      }*/
-   }
+   auto pressure_gf = DarcyFlowSolver(mesh, order, pa, static_cond);   
 
    // 5. Define a finite element space on the mesh. Here we use continuous
    //    Lagrange finite elements of the specified order. If order < 1, we
@@ -270,11 +260,12 @@ int main(int argc, char *argv[])
    BilinearForm *a = new BilinearForm(fespace);
    if (pa) { a->SetAssemblyLevel(AssemblyLevel::PARTIAL); }
    a->AddDomainIntegrator(new DiffusionIntegrator(k));
-
-
+      
    //add the convection term
+   GradientGridFunctionCoefficient velocity_new(&pressure_gf);
+
    VectorFunctionCoefficient velocity(dim, velocity_function);
-   a->AddDomainIntegrator(new ConvectionIntegratorStabilized(velocity, 1));
+   a->AddDomainIntegrator(new ConvectionIntegratorStabilized(velocity_new, 1));
   
    // 10. Assemble the bilinear form and the corresponding linear system,
    //     applying any necessary transformations such as: eliminating boundary
@@ -334,3 +325,122 @@ int main(int argc, char *argv[])
 
    return 0;
 }
+
+GridFunction DarcyFlowSolver(Mesh* mesh, int order, bool pa, bool static_cond) {
+
+  int dim = mesh->Dimension();
+
+  // 5. Define a finite element space on the mesh. Here we use continuous
+  //    Lagrange finite elements of the specified order. If order < 1, we
+  //    instead use an isoparametric/isogeometric space.
+  FiniteElementCollection* fec;
+  if (order > 0)
+  {
+    fec = new H1_FECollection(order, dim);
+  }
+  else if (mesh->GetNodes())
+  {
+    fec = mesh->GetNodes()->OwnFEC();
+    cout << "Using isoparametric FEs: " << fec->Name() << endl;
+  }
+  else
+  {
+    fec = new H1_FECollection(order = 1, dim);
+  }
+  FiniteElementSpace* fespace = new FiniteElementSpace(mesh, fec);
+  cout << "Number of finite element unknowns: "
+    << fespace->GetTrueVSize() << endl;
+
+  // 6. Determine the list of true (i.e. conforming) essential boundary dofs.
+  //    In this example, the boundary conditions are defined by marking all
+  //    the boundary attributes from the mesh as essential (Dirichlet) and
+  //    converting them to a list of true dofs.
+  Array<int> ess_tdof_list;
+  if (mesh->bdr_attributes.Size())
+  {
+    Array<int> ess_bdr(mesh->bdr_attributes.Max());
+    ess_bdr = 0;
+    ess_bdr[1] = 1;
+    fespace->GetEssentialTrueDofs(ess_bdr, ess_tdof_list);
+  }
+  cout << "\nessential dofs: "; ess_tdof_list.Print();
+  // 7. Set up the linear form b(.) which corresponds to the right-hand side of
+  //    the FEM linear system, which in this case is (1,phi_i) where phi_i are
+  //    the basis functions in the finite element fespace.
+  Vector vel(mesh->bdr_attributes.Max());
+  vel = 0.0;
+  vel(0) = 10.0;
+  PWConstCoefficient v(vel);
+
+  LinearForm* b = new LinearForm(fespace);
+  b->AddBoundaryIntegrator(new BoundaryLFIntegrator(v));
+  cout << "r.h.s. ... " << flush;
+  b->Assemble();
+
+  cout << "\nRHS: "; b->Print();
+
+  // 8. Define the solution vector x as a finite element grid function
+  //    corresponding to fespace. Initialize x with initial guess of zero,
+  //    which satisfies the boundary conditions.
+  GridFunction x(fespace);
+  x = 0.0;
+
+  // 9. Set up the bilinear form a(.,.) on the finite element space
+  //    corresponding to the Laplacian operator -Delta, by adding the Diffusion
+  //    domain integrator.
+  ConstantCoefficient perm(1.0);
+  BilinearForm* a = new BilinearForm(fespace);
+  if (pa) { a->SetAssemblyLevel(AssemblyLevel::PARTIAL); }
+  a->AddDomainIntegrator(new DiffusionIntegrator(perm));
+
+  // 10. Assemble the bilinear form and the corresponding linear system,
+  //     applying any necessary transformations such as: eliminating boundary
+  //     conditions, applying conforming constraints for non-conforming AMR,
+  //     static condensation, etc.
+  if (static_cond) { a->EnableStaticCondensation(); }
+  a->Assemble();
+  a->Finalize();
+
+  OperatorPtr A;
+  Vector B, X;
+  a->FormLinearSystem(ess_tdof_list, x, *b, A, X, B);
+
+  cout << "Size of linear system: " << A->Height() << endl;
+  cout << "\nLHS: ";
+  for (int i = 0; i < a->Size(); i++) {
+    cout << a->Elem(i, i) << ", ";
+  }
+  // 11. Solve the linear system A X = B.
+  if (!pa)
+  {
+#ifndef MFEM_USE_SUITESPARSE
+    // Use a simple symmetric Gauss-Seidel preconditioner with PCG.
+
+    GSSmoother M((SparseMatrix&)(*A));
+    GMRES((SparseMatrix&)(*A), M, *b, x, 1, 200, 10, 1e-12, 0.0);
+#else
+    // If MFEM was compiled with SuiteSparse, use UMFPACK to solve the system.
+    UMFPackSolver umf_solver;
+    umf_solver.Control[UMFPACK_ORDERING] = UMFPACK_ORDERING_METIS;
+    umf_solver.SetOperator(*A);
+    umf_solver.Mult(B, X);
+#endif
+  }
+  else // Jacobi preconditioning in partial assembly mode
+  {
+    OperatorJacobiSmoother M(*a, ess_tdof_list);
+    PCG(*A, M, B, X, 1, 400, 1e-12, 0.0);
+  }
+
+  // 12. Recover the solution as a finite element grid function.
+  a->RecoverFEMSolution(X, *b, x);
+
+  // 13. Save the refined mesh and the solution. This output can be viewed later
+  //     using GLVis: "glvis -m refined.mesh -g sol.gf".
+  ofstream vtk_ofs("D:\\OneDrive\\Documents\\VisualStudio2017\\Projects\\mfem\\examples\\conjugate_pressure.vtk");
+  vtk_ofs.precision(8);
+  mesh->PrintVTK(vtk_ofs, 1, 0);
+  x.SaveVTK(vtk_ofs, "Pressure", 1);
+
+  return x;
+};
