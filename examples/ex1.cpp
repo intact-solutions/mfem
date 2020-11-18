@@ -59,6 +59,8 @@ using namespace mfem;
 
 double omega_cutoff = 1;
 int omega_order = 1;
+double applied_load = 5.0;
+double geometry_length = 1.0;
 
 void omega_function(const Vector& x, Vector &y) {
   y.SetSize(2);
@@ -94,6 +96,27 @@ double omegagrad_only_function(const Vector& x) {
     return 0;
   }
 };
+
+double exact_solution_wo(const Vector& x) {
+  double omega = 0.0;
+  if (x[0] <= omega_cutoff) {
+    double exp = 1 - x[0] / omega_cutoff;
+    omega = omega_cutoff / omega_order * (1 - pow(exp, omega_order));
+  }
+  else {
+    omega = omega_cutoff / omega_order;
+  }
+
+  double exact_sol = x[0] * applied_load / geometry_length;
+  double limit = 1e-10;
+  if (x[0] < limit) { // limit behavior
+    exact_sol = limit * applied_load / geometry_length;
+    double exp = 1 - limit / omega_cutoff;
+    omega = omega_cutoff / omega_order * (1 - pow(exp, omega_order));
+    return exact_sol / omega;
+  }
+  else return exact_sol / omega;
+}
 
 /** Class for integrating the bilinear form a(u,v) := (Q grad u, grad v) where Q
     can be a scalar or a matrix coefficient. */
@@ -246,17 +269,16 @@ int main(int argc, char *argv[])
    bool visualization = true;
 
    int element_order = 1;
-   omega_order = 1;   
+   omega_order = 2;   
    int integration_order = ( omega_order + element_order + 1); //2n-1 --> accuracy of guassian quadrature
    cout << "\nintegration order: " << integration_order;
 
    int num_elements = 10;
-   double geometry_length = 1.0;
-   omega_cutoff = 0.25;
-   double applied_load = 5.0;
+   geometry_length = 1.0;
+   omega_cutoff = 0.5;   
    int sampling_mesh_ref = 10;
 
-   std::vector<int> omega_order_vec = { 1, 2, 3, 4, 5};
+   std::vector<double> vec = {1};
 
    // 2. Enable hardware devices such as GPUs, and programming models such as
     //    CUDA, OCCA, RAJA and OpenMP based on command line options.
@@ -271,9 +293,9 @@ int main(int argc, char *argv[])
    ofstream vtk_ofs("D:\\OneDrive\\Documents\\VisualStudio2017\\Projects\\mfem\\examples\\ex1_sol.vtk");
    mesh->PrintVTK(vtk_ofs, sampling_mesh_ref, 0);
 
-   for (auto order_i : omega_order_vec) {
-     omega_order = order_i;
-     std::string error_name("omega_order_");
+   for (auto elem_i : vec) {
+     element_order = elem_i;
+     std::string error_name("element_order");
 
      // 5. Define a finite element space on the mesh. Here we use continuous
      //    Lagrange finite elements of the specified order. If order < 1, we
@@ -286,10 +308,7 @@ int main(int argc, char *argv[])
        << fespace->GetTrueVSize() << endl;
      int size = fespace->GetVSize();
 
-     // 6. Determine the list of true (i.e. conforming) essential boundary dofs.
-     //    In this example, the boundary conditions are defined by marking only
-     //    boundary attribute 1 from the mesh as essential and converting it to a
-     //    list of true dofs.
+     // 6. Determine the list of true (i.e. conforming) essential boundary dofs.   
      Array<int> ess_tdof_list, ess_bdr(mesh->bdr_attributes.Max());
      ess_bdr = 0;
      ess_bdr[0] = 1;
@@ -333,17 +352,9 @@ int main(int argc, char *argv[])
      // 11. Solve the linear system A X = B.
      if (!pa)
      {
-#ifndef MFEM_USE_SUITESPARSE
        // Use a simple symmetric Gauss-Seidel preconditioner with PCG.
        GSSmoother M((SparseMatrix&)(*A));
        PCG(*A, M, B, X, 1, 200, 1e-12, 0.0);
-#else
-       // If MFEM was compiled with SuiteSparse, use UMFPACK to solve the system.
-       UMFPackSolver umf_solver;
-       umf_solver.Control[UMFPACK_ORDERING] = UMFPACK_ORDERING_METIS;
-       umf_solver.SetOperator(*A);
-       umf_solver.Mult(B, X);
-#endif
      }
      else // Jacobi preconditioning in partial assembly mode
      {
@@ -353,13 +364,10 @@ int main(int argc, char *argv[])
 
      // 12. Recover the solution as a finite element grid function.
      a->RecoverFEMSolution(X, rhs, x);
-     //cout << "\nSolution: "; x.Print();
-
 
      GridFunction grad_x(fespace);
      grad_x = 0.0;
      x.GetDerivative(1, 0, grad_x);
-     //cout << "\nGrad X"; grad_x.Print();
 
      //apply solution structure
      GridFunction omega_gf(fespace), omegagrad_gf(fespace);
@@ -379,6 +387,8 @@ int main(int argc, char *argv[])
      //exact solution without solution structure
      GridFunction x_exact_wo(fespace), gradx_exact_wo(fespace);
      x_exact_wo = 0.0; gradx_exact_wo = 0.0;
+     FunctionCoefficient f_ex( exact_solution_wo);
+     x_exact_wo.ProjectCoefficient(f_ex);
 
      //exact solution with solution structure
      GridFunction x_exact(fespace), gradx_exact(fespace);
@@ -393,15 +403,10 @@ int main(int argc, char *argv[])
      auto x_omega_data = x_omega.GetData();
      auto gradx_omega_data = gradx_omega.GetData();
 
-     for (int i = 0; i < x.Size(); i++) {
-
+     for (int i = 0; i < x.Size(); i++) {       
        //change the solution and it's grad
        x_omega_data[i] = x_data[i] * omega_gf(i);
-       gradx_omega_data[i] = gradx_data[i] * omega_gf(i) + x_data[i] * omegagrad_gf(i);
-
-       //exact solution without solution structure
-       x_exact_wo[i] = i == 0 ? applied_load : applied_load * point_vec(0) / omega_gf(i);
-       gradx_exact_wo[i] = i == 0 ? applied_load : (applied_load - omegagrad_gf(i) * x_exact_wo[i]) / omega_gf(i);
+       gradx_omega_data[i] = gradx_data[i] * omega_gf(i) + x_data[i] * omegagrad_gf(i);     
 
        //exact solution
        x_exact[i] = point_vec(0) * applied_load;
@@ -411,24 +416,23 @@ int main(int argc, char *argv[])
        grad_error[i] = (gradx_exact[i] - gradx_omega_data[i]) / gradx_exact[i] * 100.0;
      }
     
-     /*x.SaveVTK(vtk_ofs, "sol_wo", sampling_mesh_ref);
+     x.SaveVTK(vtk_ofs, "sol_wo", sampling_mesh_ref);
      grad_x.SaveVTK(vtk_ofs, "sol_grad_wo", sampling_mesh_ref);
      x_omega.SaveVTK(vtk_ofs, "sol", sampling_mesh_ref);
      gradx_omega.SaveVTK(vtk_ofs, "sol_grad", sampling_mesh_ref);
      omega_gf.SaveVTK(vtk_ofs, "omega", sampling_mesh_ref);
      omegagrad_gf.SaveVTK(vtk_ofs, "omega_grad", sampling_mesh_ref);
      x_exact_wo.SaveVTK(vtk_ofs, "sol_wo_exact", sampling_mesh_ref);
-     gradx_exact_wo.SaveVTK(vtk_ofs, "sol_grad_wo_exact", sampling_mesh_ref);
+     //gradx_exact_wo.SaveVTK(vtk_ofs, "sol_grad_wo_exact", sampling_mesh_ref);
      x_exact.SaveVTK(vtk_ofs, "sol_exact", sampling_mesh_ref);
-     gradx_exact.SaveVTK(vtk_ofs, "sol_grad_exact", sampling_mesh_ref);*/
-
+     gradx_exact.SaveVTK(vtk_ofs, "sol_grad_exact", sampling_mesh_ref);
 
      std::stringstream ss;
-     ss << std::fixed << std::setprecision(2) << order_i;
+     ss << std::fixed << std::setprecision(2) << elem_i;
      std::string mystring = ss.str();
 
     
-     error_name = error_name + mystring;
+     error_name = error_name + "_" + mystring;
 
      grad_error.SaveVTK(vtk_ofs, error_name, sampling_mesh_ref);
      //zero.SaveVTK(vtk_ofs, "zero", sampling_mesh_ref);
