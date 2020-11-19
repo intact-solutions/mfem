@@ -269,7 +269,7 @@ int main(int argc, char *argv[])
    bool visualization = true;
 
    int element_order = 1;
-   omega_order = 2;   
+   omega_order = 3;   
    int integration_order = ( omega_order + element_order + 1); //2n-1 --> accuracy of guassian quadrature
    cout << "\nintegration order: " << integration_order;
 
