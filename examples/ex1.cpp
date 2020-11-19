@@ -61,39 +61,72 @@ double omega_cutoff = 1;
 int omega_order = 1;
 double applied_load = 5.0;
 double geometry_length = 1.0;
+bool smoothed_flag = false;
 
 void omega_function(const Vector& x, Vector &y) {
   y.SetSize(2);
-   
-  if (x[0] <= omega_cutoff) {
-    double exp = 1 - x[0] / omega_cutoff;
-    y[0] = omega_cutoff / omega_order * (1 - pow(exp, omega_order));
-    y[1] = pow(exp, omega_order - 1);
+  
+  if (smoothed_flag) {
+    if (x[0] <= omega_cutoff) {
+      y[0] = -pow(x[0], 3) + 0.5 * pow(x[0], 4) + x[0];
+      y[1] = -3 * pow(x[0], 2) + 2 * pow(x[0], 3) + 1;
+    }
+    else {
+      y[0] = 0.5;
+      y[1] = 0;
+    }
   }
   else {
-    y[0] = omega_cutoff / omega_order;
-    y[1] = 0;
+    if (x[0] <= omega_cutoff) {
+      double exp = 1 - x[0] / omega_cutoff;
+      y[0] = omega_cutoff / omega_order * (1 - pow(exp, omega_order));
+      y[1] = pow(exp, omega_order - 1);
+    }
+    else {
+      y[0] = omega_cutoff / omega_order;
+      y[1] = 0;
+    }
   }
  };
 
 // Initial condition
 double omega_only_function(const Vector& x) {
-  if (x[0] <= omega_cutoff) {
-    double exp = 1 - x[0] / omega_cutoff;
-    return omega_cutoff / omega_order * (1 - pow(exp, omega_order));  
+  if (smoothed_flag) {
+    if (x[0] <= omega_cutoff) {
+      return -pow(x[0], 3) + 0.5 * pow(x[0], 4) + x[0];     
+    }
+    else {
+      return 0.5;
+    }
   }
   else {
-    return omega_cutoff / omega_order;
+    if (x[0] <= omega_cutoff) {
+      double exp = 1 - x[0] / omega_cutoff;
+      return omega_cutoff / omega_order * (1 - pow(exp, omega_order));
+    }
+    else {
+      return omega_cutoff / omega_order;
+    }
   }
 };
 
 double omegagrad_only_function(const Vector& x) {
-  if (x[0] <= omega_cutoff) {
-    double exp = 1 - x[0] / omega_cutoff;
-    return pow(exp, omega_order - 1);
+  if (smoothed_flag) {
+    if (x[0] <= omega_cutoff) {
+      return -3 * pow(x[0], 2) + 2 * pow(x[0], 3) + 1;
+    }
+    else {
+      return 0;
+    }
   }
   else {
-    return 0;
+    if (x[0] <= omega_cutoff) {
+      double exp = 1 - x[0] / omega_cutoff;
+      return pow(exp, omega_order - 1);
+    }
+    else {
+      return 0;
+    }
   }
 };
 
@@ -273,9 +306,10 @@ int main(int argc, char *argv[])
    int integration_order = ( omega_order + element_order + 1); //2n-1 --> accuracy of guassian quadrature
    cout << "\nintegration order: " << integration_order;
 
-   int num_elements = 10;
-   geometry_length = 1.0;
-   omega_cutoff = 0.5;   
+   smoothed_flag = true;
+   int num_elements = 30;
+   geometry_length = 10.0;
+   omega_cutoff = 1.0;   
    int sampling_mesh_ref = 10;
 
    std::vector<double> vec = {1};
