@@ -61,61 +61,103 @@ double omega_cutoff = 1;
 int omega_order = 1;
 double applied_load = 5.0;
 double geometry_length = 1.0;
+bool hermite = false;
+double cutoff_val = 1.0;
+double initial_slope = 1.0;
 
 void omega_function(const Vector& x, Vector &y) {
   y.SetSize(2);
-   
-  if (x[0] <= omega_cutoff) {
-    double exp = 1 - x[0] / omega_cutoff;
-    y[0] = omega_cutoff / omega_order * (1 - pow(exp, omega_order));
-    y[1] = pow(exp, omega_order - 1);
-  }
-  else {
-    y[0] = omega_cutoff / omega_order;
-    y[1] = 0;
+
+  if (hermite) {
+    double const p_1 = cutoff_val;
+    double const m_0 = initial_slope;
+    if (x[0] <= omega_cutoff) {
+      double t = 1 - ((omega_cutoff - x[0]) / omega_cutoff);
+      double t_sq = t * t;
+      double const t_cb = t_sq * t;      
+      y[0] = (t_cb - 2 * t_sq + t) * m_0 + (-2 * t_cb + 3 * t_sq) * p_1;
+      y[1] = (3 * t_sq - 4 * t + 1) * m_0 + (-6 * t_sq + 6 * t) * p_1;
+    }
+    else {
+      y[0] = p_1;
+      y[1] = 0;
+    }
+  } else {
+    if (x[0] <= omega_cutoff) {
+      double exp = 1 - x[0] / omega_cutoff;
+      y[0] = omega_cutoff / omega_order * (1 - pow(exp, omega_order));
+      y[1] = pow(exp, omega_order - 1);
+    }
+    else {
+      y[0] = omega_cutoff / omega_order;
+      y[1] = 0;
+    }
   }
  };
 
 // Initial condition
 double omega_only_function(const Vector& x) {
-  if (x[0] <= omega_cutoff) {
-    double exp = 1 - x[0] / omega_cutoff;
-    return omega_cutoff / omega_order * (1 - pow(exp, omega_order));  
+  if (hermite) {
+    double const p_1 = cutoff_val;
+    double const m_0 = initial_slope;
+    if (x[0] <= omega_cutoff) {
+      double t = 1 - ((omega_cutoff - x[0]) / omega_cutoff);
+      double t_sq = t * t;
+      double const t_cb = t_sq * t;
+      return (t_cb - 2 * t_sq + t) * m_0 + (-2 * t_cb + 3 * t_sq) * p_1;
+    }
+    else {
+      return p_1;
+    }
   }
   else {
-    return omega_cutoff / omega_order;
+    if (x[0] <= omega_cutoff) {
+      double exp = 1 - x[0] / omega_cutoff;
+      return omega_cutoff / omega_order * (1 - pow(exp, omega_order));
+    }
+    else {
+      return omega_cutoff / omega_order;
+    }
   }
 };
 
 double omegagrad_only_function(const Vector& x) {
-  if (x[0] <= omega_cutoff) {
-    double exp = 1 - x[0] / omega_cutoff;
-    return pow(exp, omega_order - 1);
+  if (hermite) {
+    double const p_1 = cutoff_val;
+    double const m_0 = initial_slope;
+    if (x[0] <= omega_cutoff) {
+      double t = 1 - ((omega_cutoff - x[0]) / omega_cutoff);
+      double t_sq = t * t;
+      double const t_cb = t_sq * t;      
+      return (3 * t_sq - 4 * t + 1) * m_0 + (-6 * t_sq + 6 * t) * p_1;
+    }
+    else {
+      return 0;
+    }
   }
   else {
-    return 0;
+    if (x[0] <= omega_cutoff) {
+      double exp = 1 - x[0] / omega_cutoff;
+      return pow(exp, omega_order - 1);
+    }
+    else {
+      return 0;
+    }
   }
 };
 
-double exact_solution_wo(const Vector& x) {
-  double omega = 0.0;
-  if (x[0] <= omega_cutoff) {
-    double exp = 1 - x[0] / omega_cutoff;
-    omega = omega_cutoff / omega_order * (1 - pow(exp, omega_order));
-  }
-  else {
-    omega = omega_cutoff / omega_order;
-  }
-
-  double exact_sol = x[0] * applied_load / geometry_length;
+double exact_solution_wo(const Vector& x) {  
   double limit = 1e-10;
   if (x[0] < limit) { // limit behavior
-    exact_sol = limit * applied_load / geometry_length;
-    double exp = 1 - limit / omega_cutoff;
-    omega = omega_cutoff / omega_order * (1 - pow(exp, omega_order));
-    return exact_sol / omega;
+    Vector y(x); y[0] = limit;
+    double omega_limit = omega_only_function(y);
+    double exact_sol_limit = limit * applied_load / geometry_length;
+    return exact_sol_limit / omega_limit;
   }
-  else return exact_sol / omega;
+  else { 
+    double omega = omega_only_function(x);
+    double exact_sol = x[0] * applied_load / geometry_length;
+    return exact_sol / omega; }
 }
 
 /** Class for integrating the bilinear form a(u,v) := (Q grad u, grad v) where Q
@@ -268,16 +310,22 @@ int main(int argc, char *argv[])
    const char *device_config = "cpu";
    bool visualization = true;
 
+   //hermite omega
+   hermite = true;
+   cutoff_val = 0.2;
+   initial_slope = 1.0;
+
    int element_order = 1;
-   omega_order = 2;   
+   omega_order = 2;
+   omega_order = hermite? 3: omega_order;
    int integration_order = ( omega_order + element_order + 1); //2n-1 --> accuracy of guassian quadrature
    cout << "\nintegration order: " << integration_order;
 
-   int num_elements = 10;
+   int num_elements = 100;
    geometry_length = 1.0;
-   omega_cutoff = 0.5;   
+   omega_cutoff = 0.1;   
    int sampling_mesh_ref = 10;
-
+     
    std::vector<double> vec = {1};
 
    // 2. Enable hardware devices such as GPUs, and programming models such as
