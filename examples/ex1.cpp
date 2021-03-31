@@ -307,12 +307,12 @@ int main(int argc, char *argv[])
    cout << "\nintegration order: " << integration_order;
 
    smoothed_flag = true;
-   int num_elements = 30;
+   int num_elements = 25;
    geometry_length = 10.0;
    omega_cutoff = 1.0;   
    int sampling_mesh_ref = 10;
 
-   std::vector<double> vec = {1};
+   std::vector<double> vec = {10,20,50,70,100};
 
    // 2. Enable hardware devices such as GPUs, and programming models such as
     //    CUDA, OCCA, RAJA and OpenMP based on command line options.
@@ -328,8 +328,8 @@ int main(int argc, char *argv[])
    mesh->PrintVTK(vtk_ofs, sampling_mesh_ref, 0);
 
    for (auto elem_i : vec) {
-     element_order = elem_i;
-     std::string error_name("element_order");
+     num_elements = elem_i;
+     std::string error_name("num_elements");
 
      // 5. Define a finite element space on the mesh. Here we use continuous
      //    Lagrange finite elements of the specified order. If order < 1, we
@@ -450,16 +450,16 @@ int main(int argc, char *argv[])
        grad_error[i] = (gradx_exact[i] - gradx_omega_data[i]) / gradx_exact[i] * 100.0;
      }
     
-     x.SaveVTK(vtk_ofs, "sol_wo", sampling_mesh_ref);
-     grad_x.SaveVTK(vtk_ofs, "sol_grad_wo", sampling_mesh_ref);
-     x_omega.SaveVTK(vtk_ofs, "sol", sampling_mesh_ref);
-     gradx_omega.SaveVTK(vtk_ofs, "sol_grad", sampling_mesh_ref);
-     omega_gf.SaveVTK(vtk_ofs, "omega", sampling_mesh_ref);
-     omegagrad_gf.SaveVTK(vtk_ofs, "omega_grad", sampling_mesh_ref);
-     x_exact_wo.SaveVTK(vtk_ofs, "sol_wo_exact", sampling_mesh_ref);
-     //gradx_exact_wo.SaveVTK(vtk_ofs, "sol_grad_wo_exact", sampling_mesh_ref);
-     x_exact.SaveVTK(vtk_ofs, "sol_exact", sampling_mesh_ref);
-     gradx_exact.SaveVTK(vtk_ofs, "sol_grad_exact", sampling_mesh_ref);
+     //x.SaveVTK(vtk_ofs, "sol_wo", sampling_mesh_ref);
+     //grad_x.SaveVTK(vtk_ofs, "sol_grad_wo", sampling_mesh_ref);
+     //x_omega.SaveVTK(vtk_ofs, "sol", sampling_mesh_ref);
+     //gradx_omega.SaveVTK(vtk_ofs, "sol_grad", sampling_mesh_ref);
+     //omega_gf.SaveVTK(vtk_ofs, "omega", sampling_mesh_ref);
+     //omegagrad_gf.SaveVTK(vtk_ofs, "omega_grad", sampling_mesh_ref);
+     //x_exact_wo.SaveVTK(vtk_ofs, "sol_wo_exact", sampling_mesh_ref);
+     ////gradx_exact_wo.SaveVTK(vtk_ofs, "sol_grad_wo_exact", sampling_mesh_ref);
+     //x_exact.SaveVTK(vtk_ofs, "sol_exact", sampling_mesh_ref);
+     //gradx_exact.SaveVTK(vtk_ofs, "sol_grad_exact", sampling_mesh_ref);
 
      std::stringstream ss;
      ss << std::fixed << std::setprecision(2) << elem_i;
